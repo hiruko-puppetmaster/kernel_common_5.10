@@ -49,8 +49,8 @@ jobs:
           set -euo pipefail
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            clang-18 lld-18 llvm-18 bc bison flex libelf-dev libssl-dev \
-            python3 cpio rsync zip unzip xz-utils zstd
+            clang-18 lld-18 llvm-18 gcc-aarch64-linux-gnu bc bison flex \
+            libelf-dev libssl-dev python3 cpio rsync zip unzip xz-utils zstd
           echo "/usr/lib/llvm-18/bin" >> "$GITHUB_PATH"
 
       - name: Record toolchain
@@ -60,6 +60,8 @@ jobs:
           clang --version
           ld.lld --version
           make --version | head -n1
+          echo "target: $(clang --target=aarch64-linux-gnu -dumpmachine)"
+          echo "cross elfedit: $(command -v aarch64-linux-gnu-elfedit || echo MISSING)"
           echo "cpus: $(nproc)"
           df -h /
 
@@ -71,10 +73,10 @@ jobs:
       - name: Configure
         run: |
           set -euo pipefail
-          make O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 gki_defconfig
+          make O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-gnu- gki_defconfig
           scripts/kconfig/merge_config.sh -m -O out out/.config \
             arch/arm64/configs/performance.fragment
-          make O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 olddefconfig
+          make O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-gnu- olddefconfig
 
       - name: Assert ABI-critical config
         run: |
@@ -140,12 +142,12 @@ jobs:
       - name: Build Image
         run: |
           set -euo pipefail
-          make O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 -j"$(nproc)" Image 2>&1 | tee build.log
+          make O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-gnu- -j"$(nproc)" Image 2>&1 | tee build.log
 
       - name: Verify release string
         run: |
           set -euo pipefail
-          rel="$(make -s O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 kernelrelease | tail -n1)"
+          rel="$(make -s O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-gnu- kernelrelease | tail -n1)"
           echo "kernelrelease: $rel"
           # Spec: 5.10.xxx-android12-9<KERNEL_NAME>, never -dirty.
           if [[ ! "$rel" =~ ^5\.10\.[0-9]+-android12-9-Satetsu-Shigure$ ]]; then
