@@ -49,6 +49,14 @@ jobs:
     env:
       KBUILD_BUILD_USER: hiruko
       KBUILD_BUILD_HOST: Sunagakure
+      # The kernel is built OUTSIDE $GITHUB_WORKSPACE on purpose.
+      # actions/checkout creates a .git at the workspace root, and
+      # scripts/setlocalversion walks *up* from the tree it is given: run 13
+      # produced "5.10.274-android12-9-Satetsu-Shigure-gfb992a207187" because
+      # the build tree was src/ inside that repo. /home/runner/kernel has no
+      # repository above it, so the release is exactly
+      # KERNELVERSION + CONFIG_LOCALVERSION, with no -g<sha> and no -dirty.
+      KSRC: /home/runner/kernel
 
     steps:
       - name: Reclaim disk space
@@ -94,29 +102,40 @@ jobs:
           echo "fetching $url"
           curl -fsSL --retry 3 -o ack.tar.gz "$url"
           echo "tarball bytes: $(stat -c%s ack.tar.gz)"
-          mkdir -p src
-          tar -xzf ack.tar.gz -C src
+          mkdir -p "$KSRC"
+          tar -xzf ack.tar.gz -C "$KSRC"
           rm -f ack.tar.gz
 
-          got="$(make -s -C src kernelversion)"
+          got="$(make -s -C "$KSRC" kernelversion)"
           echo "source version: $got (expected ${ACK_VERSION})"
           [[ "$got" == "${ACK_VERSION}" ]] || {
             echo "FAIL: tarball is not ${ACK_VERSION}"; exit 1; }
 
-          cp arch/arm64/configs/performance.fragment src/arch/arm64/configs/
-          cp -r abi src/
-          for p in patches/*.patch; do
+          # Guard the release string: setlocalversion only stays silent when no
+          # git repository is reachable from the build tree.
+          if top="$(git -C "$KSRC" rev-parse --show-toplevel 2>/dev/null)"; then
+            echo "FAIL: git repository visible from $KSRC at $top"
+            exit 1
+          fi
+          echo "no SCM above $KSRC: release string will be clean"
+
+          cp arch/arm64/configs/performance.fragment "$KSRC/arch/arm64/configs/"
+          cp -r abi "$KSRC/"
+          shopt -s nullglob
+          patch_list=(patches/*.patch)
+          [[ ${#patch_list[@]} -ge 1 ]] || { echo "FAIL: no patches found"; exit 1; }
+          for p in "${patch_list[@]}"; do
             echo "applying $p"
-            patch -p1 -d src < "$p"
+            patch -p1 -d "$KSRC" < "$p"
           done
 
-          # The tarball has no .git, so scripts/setlocalversion emits nothing:
+          # The tree has no .git, so scripts/setlocalversion emits nothing:
           # no -dirty, no -g<sha>, and MODULE_SCMVERSION simply omits the
           # attribute. That is why the release string is reproducible.
-          grep -n -A4 '^config STACKPROTECTOR_PER_TASK' src/arch/arm64/Kconfig
+          grep -n -A4 '^config STACKPROTECTOR_PER_TASK' "$KSRC/arch/arm64/Kconfig"
 
       - name: Configure
-        working-directory: src
+        working-directory: ${{ env.KSRC }}
         run: |
           set -euo pipefail
           make O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-gnu- gki_defconfig
@@ -125,7 +144,7 @@ jobs:
           make O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-gnu- olddefconfig
 
       - name: Assert ABI-critical config
-        working-directory: src
+        working-directory: ${{ env.KSRC }}
         run: |
           set -euo pipefail
           echo "=== toolchain as Kconfig sees it ==="
@@ -187,11 +206,11 @@ jobs:
           name: failing-config
           if-no-files-found: ignore
           path: |
-            src/out/.config
-            src/build.log
+            ${{ env.KSRC }}/out/.config
+            ${{ env.KSRC }}/build.log
 
       - name: Build Image
-        working-directory: src
+        working-directory: ${{ env.KSRC }}
         run: |
           set -euo pipefail
           # -k keeps going after an error so one run reports every remaining
@@ -199,22 +218,28 @@ jobs:
           make -k O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-gnu- -j"$(nproc)" Image 2>&1 | tee build.log
 
       - name: Verify release string
-        working-directory: src
+        working-directory: ${{ env.KSRC }}
         run: |
           set -euo pipefail
           rel="$(make -s O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-gnu- kernelrelease | tail -n1)"
           echo "kernelrelease: $rel"
-          # Spec: 5.10.xxx-android12-9<KERNEL_NAME>, never -dirty.
-          if [[ ! "$rel" =~ ^5\.10\.[0-9]+-android12-9-Satetsu-Shigure$ ]]; then
-            echo "FAIL: release string violates the required form"
+          # Spec: 5.10.xxx-android12-9<KERNEL_NAME>, never -dirty, never -g<sha>.
+          expected="${ACK_VERSION}-android12-9-Satetsu-Shigure"
+          if [[ "$rel" != "$expected" ]]; then
+            echo "FAIL: expected '$expected', got '$rel'"
+            case "$rel" in
+              *-dirty) echo "hint: tracked files in the source tree were modified" ;;
+              *-g*)    echo "hint: setlocalversion found a git repository above $KSRC" ;;
+            esac
             exit 1
           fi
+          echo "release string: OK"
           test -s out/arch/arm64/boot/Image
           ls -l out/arch/arm64/boot/Image
           echo "RELEASE=$rel" >> "$GITHUB_ENV"
 
       - name: Verify vendor ABI
-        working-directory: src
+        working-directory: ${{ env.KSRC }}
         run: |
           set -euo pipefail
           # `make Image` links vmlinux, and link-vmlinux.sh runs modpost with
@@ -234,7 +259,7 @@ jobs:
           git clone --depth=1 -b android12-5.10 \
             https://github.com/XTENSEI/GrayRavens-anykernel.git ak3
           sed -i 's|^kernel.string=.*|kernel.string=Satetsu Shigure GKI 5.10 by Hiruko|' ak3/anykernel.sh
-          cp src/out/arch/arm64/boot/Image ak3/Image
+          cp "$KSRC/out/arch/arm64/boot/Image" ak3/Image
           rm -rf ak3/.git ak3/.github ak3/README.md
           ( cd ak3 && zip -r9 "../${zip}" . -x '*.git*' )
           sha256sum "$zip" > "${zip}.sha256"
@@ -249,9 +274,9 @@ jobs:
           path: |
             ${{ env.ZIP }}
             ${{ env.ZIP }}.sha256
-            src/out/arch/arm64/boot/Image
-            src/out/vmlinux.symvers
-            src/build.log
+            ${{ env.KSRC }}/out/arch/arm64/boot/Image
+            ${{ env.KSRC }}/out/vmlinux.symvers
+            ${{ env.KSRC }}/build.log
 
       - name: Publish release
         if: startsWith(github.ref, 'refs/tags/v5.10-satetsu')
@@ -264,8 +289,8 @@ jobs:
             echo
             echo "- kernelrelease: \`${RELEASE}\`"
             echo "- ACK source: \`${ACK_COMMIT}\` (${ACK_VERSION})"
-            echo "- module_layout: \`$(awk '$2=="module_layout"{print $1}' src/out/vmlinux.symvers)\`"
-            echo "- Image bytes: $(stat -c%s src/out/arch/arm64/boot/Image)"
+            echo "- module_layout: \`$(awk '$2=="module_layout"{print $1}' "$KSRC/out/vmlinux.symvers")\`"
+            echo "- Image bytes: $(stat -c%s "$KSRC/out/arch/arm64/boot/Image")"
             echo
             echo "Verify before flashing:"
             echo '```'
@@ -283,6 +308,6 @@ jobs:
           name: failure-diagnostics
           if-no-files-found: ignore
           path: |
-            src/out/.config
-            src/out/vmlinux.symvers
-            src/build.log
+            ${{ env.KSRC }}/out/.config
+            ${{ env.KSRC }}/out/vmlinux.symvers
+            ${{ env.KSRC }}/build.log
