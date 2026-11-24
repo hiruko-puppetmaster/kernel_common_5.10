@@ -87,6 +87,13 @@ jobs:
           echo "=== LTO / compiler symbols in out/.config ==="
           grep -E 'CONFIG_(LTO|CC_IS_CLANG|LD_IS_LLD|HAS_LTO|CLANG_VERSION)' out/.config \
             || echo "(no LTO symbols at all)"
+          echo "=== HAS_LTO_CLANG shell probes ==="
+          for tool in llvm-nm llvm-ar; do
+            echo "$tool --help[1]: $($tool --help 2>&1 | head -n1)"
+          done
+          echo "=== remaining HAS_LTO_CLANG deps in out/.config ==="
+          grep -E 'CONFIG_(ARCH_SUPPORTS_LTO|FTRACE_MCOUNT_USE_RECORDMCOUNT|KASAN|GCOV_KERNEL)' out/.config \
+            || echo "(none of these deps present in config)"
           echo "=== config size: $(wc -l < out/.config) lines ==="
           check() {
             grep -qx "$1" out/.config || {

@@ -42,6 +42,15 @@ CONFIG_MODVERSIONS=y
 CONFIG_LOCALVERSION_AUTO=y
 CONFIG_MODULE_SCMVERSION=y
 
+# --- Debug instrumentation -------------------------------------------------
+# gki_defconfig sets KASAN=y + KASAN_HW_TAGS=y. arch/Kconfig's HAS_LTO_CLANG
+# has "depends on !KASAN || KASAN_HW_TAGS", so KASAN state silently gates the
+# entire LTO choice: if KASAN_HW_TAGS fails to resolve, LTO falls back to
+# LTO_NONE and CONFIG_LTO_CLANG_THIN disappears. KASAN is ABI-neutral and
+# costs a lot of build time and runtime memory, so it is dropped here.
+# CONFIG_KASAN is not set
+# CONFIG_KASAN_HW_TAGS is not set
+
 # --- Build size ------------------------------------------------------------
 # gki_defconfig sets DEBUG_INFO=y. Under ThinLTO that keeps DWARF inside every
 # bitcode object: tens of GB of out/ and a much longer link. It has no effect
