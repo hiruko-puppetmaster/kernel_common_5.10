@@ -166,17 +166,42 @@ jobs:
           # `make Image` links vmlinux, and link-vmlinux.sh runs modpost with
           # MODPOST_VMLINUX=1, which writes vmlinux.symvers. Module.symvers is
           # only produced by a modules build, which this job does not do.
-          # Columns: CRC <TAB> symbol <TAB> module <TAB> export
           symvers=out/vmlinux.symvers
-          if [[ ! -s "$symvers" ]]; then
-            echo "FAIL: $symvers is missing"
-            ls -l out/*.symvers 2>/dev/null || echo "(no *.symvers in out/)"
-            exit 1
-          fi
-          ml="$(awk '$2=="module_layout"{print $1}' "$symvers")"
-          echo "module_layout: ${ml:-<absent>} (expected $EXPECTED_MODULE_LAYOUT)"
-          test "$ml" = "$EXPECTED_MODULE_LAYOUT"
-          echo "exported symbols: $(wc -l < "$symvers")"
+          ref=abi/x6882_vendor_crcs_loaded.tsv
+          for f in "$symvers" "$ref"; do
+            if [[ ! -s "$f" ]]; then
+              echo "FAIL: $f is missing"
+              ls -l out/*.symvers 2>/dev/null || echo "(no *.symvers in out/)"
+              exit 1
+            fi
+          done
+
+          echo "kernel exports: $(wc -l < "$symvers")"
+          echo "vendor imports: $(wc -l < "$ref")"
+
+          # vmlinux.symvers columns: CRC <TAB> symbol <TAB> module <TAB> export
+          # reference columns:       symbol <TAB> expected CRC
+          awk -F'\t' '
+            NR==FNR { want[$1]=$2; next }
+            { have[$2]=$1 }
+            END {
+              total=0; ok=0; bad=0; miss=0
+              for (s in want) {
+                total++
+                if (!(s in have)) {
+                  miss++
+                  if (miss<=20) printf "MISSING   %-42s expected %s\n", s, want[s]
+                } else if (tolower(have[s])==tolower(want[s])) {
+                  ok++
+                } else {
+                  bad++
+                  if (bad<=20) printf "MISMATCH  %-42s expected %s got %s\n", s, want[s], have[s]
+                }
+              }
+              printf "SUMMARY total=%d ok=%d mismatch=%d missing=%d\n", total, ok, bad, miss
+              exit (total!=2462 || bad || miss) ? 1 : 0
+            }
+          ' "$ref" "$symvers"
 
       - name: Package AnyKernel3
         run: |
@@ -215,7 +240,7 @@ jobs:
             echo "Built from \`${GITHUB_SHA}\` on $(date -u +%Y-%m-%dT%H:%M:%SZ)."
             echo
             echo "- kernelrelease: \`${RELEASE}\`"
-            echo "- module_layout: \`$(awk '$2=="module_layout"{print $1}' out/Module.symvers)\`"
+            echo "- module_layout: \`$(awk '$2=="module_layout"{print $1}' out/vmlinux.symvers)\`"
             echo "- Image bytes: $(stat -c%s out/arch/arm64/boot/Image)"
             echo
             echo "Verify before flashing:"
@@ -226,3 +251,14 @@ jobs:
           gh release create "$GITHUB_REF_NAME" "$ZIP" "$ZIP.sha256" \
             --title "Satetsu Shigure (GKI 5.10 - X6882)" \
             --notes-file release-notes.md
+
+      - name: Upload failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: failure-diagnostics
+          if-no-files-found: ignore
+          path: |
+            out/.config
+            out/vmlinux.symvers
+            build.log
