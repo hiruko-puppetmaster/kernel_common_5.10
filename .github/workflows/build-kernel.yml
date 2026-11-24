@@ -92,7 +92,7 @@ jobs:
             echo "$tool --help[1]: $($tool --help 2>&1 | head -n1)"
           done
           echo "=== remaining HAS_LTO_CLANG deps in out/.config ==="
-          grep -E 'CONFIG_(ARCH_SUPPORTS_LTO|FTRACE_MCOUNT_USE_RECORDMCOUNT|KASAN|GCOV_KERNEL)' out/.config \
+          grep -E 'CONFIG_(ARCH_SUPPORTS_LTO|FTRACE_MCOUNT_USE_RECORDMCOUNT|KASAN|GCOV_KERNEL|SHADOW_CALL_STACK|CC_HAVE_SHADOW_CALL_STACK|DYNAMIC_FTRACE|FUNCTION_GRAPH_TRACER|FTRACE=|CFI_CLANG)' out/.config \
             || echo "(none of these deps present in config)"
           echo "=== config size: $(wc -l < out/.config) lines ==="
           check() {
@@ -126,6 +126,16 @@ jobs:
             fi
           done
           echo "config assertions: OK"
+
+      - name: Upload failing config
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: failing-config
+          if-no-files-found: ignore
+          path: |
+            out/.config
+            build.log
 
       - name: Build Image
         run: |

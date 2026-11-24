@@ -49,6 +49,20 @@ CONFIG_MODVERSIONS=y
 CONFIG_LOCALVERSION_AUTO=y
 CONFIG_MODULE_SCMVERSION=y
 
+# Every ABI-critical symbol below is ALSO present in gki_defconfig, but
+# "make gki_defconfig" evaluates that file while KASAN_HW_TAGS still blocks
+# HAS_LTO_CLANG, so any symbol whose dependency chain touches LTO (or a
+# transiently-unavailable option) is discarded as invalid at that moment.
+# olddefconfig never re-enables a symbol it dropped, so each one is re-asserted
+# here, after KASAN is turned off. This closes the whole class of bug rather
+# than one symbol per build.
+CONFIG_MODULE_UNLOAD=y
+CONFIG_MODULE_FORCE_LOAD=y
+CONFIG_KALLSYMS_ALL=y
+CONFIG_KPROBES=y
+CONFIG_SHADOW_CALL_STACK=y
+CONFIG_ANDROID_KABI_RESERVE=y
+
 # --- Debug instrumentation -------------------------------------------------
 # gki_defconfig sets KASAN=y + KASAN_HW_TAGS=y. arch/Kconfig's HAS_LTO_CLANG
 # has "depends on !KASAN || KASAN_HW_TAGS", so KASAN state silently gates the
