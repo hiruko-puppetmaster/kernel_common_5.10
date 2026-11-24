@@ -390,7 +390,15 @@ static inline void rcu_preempt_sleep_check(void) { }
 
 #else /* #ifdef CONFIG_PROVE_RCU */
 
-#define RCU_LOCKDEP_WARN(c, s) do { } while (0)
+/*
+ * Keep @c referenced even when PROVE_RCU is off. Callers legitimately pass a
+ * variable that is otherwise unused, e.g. net/xfrm/xfrm_user.c does
+ * rcu_dereference_protected(net->xfrm.nlsk, sk->sk_net_refcnt) where @sk is
+ * used nowhere else; dropping @c makes that variable unused and -Werror
+ * (CONFIG_WERROR=y) turns it into a build failure. Mainline uses the same
+ * "0 && (c)" form for exactly this reason.
+ */
+#define RCU_LOCKDEP_WARN(c, s) do { } while (0 && (c))
 #define rcu_sleep_check() do { } while (0)
 
 #endif /* #else #ifdef CONFIG_PROVE_RCU */

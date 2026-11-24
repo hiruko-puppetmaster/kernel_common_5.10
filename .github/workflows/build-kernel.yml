@@ -142,7 +142,9 @@ jobs:
       - name: Build Image
         run: |
           set -euo pipefail
-          make O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-gnu- -j"$(nproc)" Image 2>&1 | tee build.log
+          # -k keeps going after an error so one run reports every remaining
+          # problem instead of only the first one.
+          make -k O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-gnu- -j"$(nproc)" Image 2>&1 | tee build.log
 
       - name: Verify release string
         run: |
