@@ -163,11 +163,20 @@ jobs:
       - name: Verify vendor ABI
         run: |
           set -euo pipefail
-          # Module.symvers columns: CRC <TAB> symbol <TAB> module <TAB> export
-          ml="$(awk '$2=="module_layout"{print $1}' out/Module.symvers)"
+          # `make Image` links vmlinux, and link-vmlinux.sh runs modpost with
+          # MODPOST_VMLINUX=1, which writes vmlinux.symvers. Module.symvers is
+          # only produced by a modules build, which this job does not do.
+          # Columns: CRC <TAB> symbol <TAB> module <TAB> export
+          symvers=out/vmlinux.symvers
+          if [[ ! -s "$symvers" ]]; then
+            echo "FAIL: $symvers is missing"
+            ls -l out/*.symvers 2>/dev/null || echo "(no *.symvers in out/)"
+            exit 1
+          fi
+          ml="$(awk '$2=="module_layout"{print $1}' "$symvers")"
           echo "module_layout: ${ml:-<absent>} (expected $EXPECTED_MODULE_LAYOUT)"
           test "$ml" = "$EXPECTED_MODULE_LAYOUT"
-          echo "exported symbols: $(wc -l < out/Module.symvers)"
+          echo "exported symbols: $(wc -l < "$symvers")"
 
       - name: Package AnyKernel3
         run: |
@@ -193,7 +202,7 @@ jobs:
             ${{ env.ZIP }}
             ${{ env.ZIP }}.sha256
             out/arch/arm64/boot/Image
-            out/Module.symvers
+            out/vmlinux.symvers
             build.log
 
       - name: Publish release
