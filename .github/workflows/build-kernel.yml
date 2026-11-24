@@ -1,15 +1,23 @@
 # Build Satetsu Shigure - GKI 5.10 for Infinix Hot 50 4G (X6882 / MT6789)
 #
-# Runs on an x86_64 Linux host, which is the platform the AOSP kernel build
-# system and arch/arm64/configs/gki_defconfig are written for. This supersedes
-# the local aarch64/Termux attempt, which could not survive PRoot futex faults.
+# Source is a pristine AOSP ACK android12-5.10-lts tree, fetched as an
+# exact-commit tarball (see ACK_COMMIT). This repository is a control plane:
+# only this workflow, arch/arm64/configs/performance.fragment, patches/ and
+# abi/ are used. The kernel tree checked in here is the old Zenithed base and
+# is NOT built -- its 260 patched files change struct layouts and broke the
+# vendor ABI (814 CRC mismatches, module_layout 0x1da8fe35 vs 0x7c24b32d).
+#
+# Why pristine ACK: the device's own kernel ABI (android/abi_gki_aarch64.xml
+# in the ACK tree) matches the 186 vendor modules' CRCs on 1397/1397
+# overlapping symbols, and a plain gki_defconfig build of that tree reproduces
+# them exactly. The KMI is frozen, so 5.10.274 exports the same CRCs the
+# vendor 5.10.226 kernel did.
 #
 # Per run this produces:
-#   Satetsu-Shigure-X6882-GKI510-v5.10-satetsu-<UTC>.zip   AnyKernel3, ready to flash
+#   Satetsu-Shigure-X6882-GKI510-v5.10-satetsu-<UTC>.zip   AnyKernel3
 #   <zip>.sha256
 #   out/arch/arm64/boot/Image
-#   out/Module.symvers    -> feed to knowledge/check_vendor_crcs.sh for the
-#                            full 2,462-symbol vendor ABI gate
+#   out/vmlinux.symvers    -> knowledge/check_vendor_crcs.sh
 #   build.log
 
 name: Build Satetsu Shigure GKI 5.10
@@ -23,6 +31,15 @@ on:
 permissions:
   contents: write
 
+env:
+  # Pinned ACK commit: "Merge 5.10.274 into android12-5.10-lts".
+  # The tarball URL accepts a commit id, so the build cannot drift when the
+  # branch moves.
+  ACK_REPO: https://android.googlesource.com/kernel/common
+  ACK_COMMIT: c5acf8d66b6c3d1957c3bbf410370e06a68a6f40
+  ACK_VERSION: '5.10.274'
+  EXPECTED_MODULE_LAYOUT: '0x7c24b32d'
+
 jobs:
   build:
     name: Image (arm64, ThinLTO + CFI)
@@ -32,7 +49,6 @@ jobs:
     env:
       KBUILD_BUILD_USER: hiruko
       KBUILD_BUILD_HOST: Sunagakure
-      EXPECTED_MODULE_LAYOUT: '0x7c24b32d'
 
     steps:
       - name: Reclaim disk space
@@ -50,7 +66,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             clang-18 lld-18 llvm-18 gcc-aarch64-linux-gnu bc bison flex \
-            libelf-dev libssl-dev python3 cpio rsync zip unzip xz-utils zstd
+            libelf-dev libssl-dev python3 cpio rsync zip unzip xz-utils zstd \
+            patch
           echo "/usr/lib/llvm-18/bin" >> "$GITHUB_PATH"
 
       - name: Record toolchain
@@ -65,12 +82,41 @@ jobs:
           echo "cpus: $(nproc)"
           df -h /
 
-      - name: Checkout source
+      - name: Checkout control files
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
 
+      - name: Fetch pristine ACK source
+        run: |
+          set -euo pipefail
+          url="${ACK_REPO}/+archive/${ACK_COMMIT}.tar.gz"
+          echo "fetching $url"
+          curl -fsSL --retry 3 -o ack.tar.gz "$url"
+          echo "tarball bytes: $(stat -c%s ack.tar.gz)"
+          mkdir -p src
+          tar -xzf ack.tar.gz -C src
+          rm -f ack.tar.gz
+
+          got="$(make -s -C src kernelversion)"
+          echo "source version: $got (expected ${ACK_VERSION})"
+          [[ "$got" == "${ACK_VERSION}" ]] || {
+            echo "FAIL: tarball is not ${ACK_VERSION}"; exit 1; }
+
+          cp arch/arm64/configs/performance.fragment src/arch/arm64/configs/
+          cp -r abi src/
+          for p in patches/*.patch; do
+            echo "applying $p"
+            patch -p1 -d src < "$p"
+          done
+
+          # The tarball has no .git, so scripts/setlocalversion emits nothing:
+          # no -dirty, no -g<sha>, and MODULE_SCMVERSION simply omits the
+          # attribute. That is why the release string is reproducible.
+          grep -n -A4 '^config STACKPROTECTOR_PER_TASK' src/arch/arm64/Kconfig
+
       - name: Configure
+        working-directory: src
         run: |
           set -euo pipefail
           make O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-gnu- gki_defconfig
@@ -79,23 +125,16 @@ jobs:
           make O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-gnu- olddefconfig
 
       - name: Assert ABI-critical config
+        working-directory: src
         run: |
           set -euo pipefail
           echo "=== toolchain as Kconfig sees it ==="
           clang --version | head -n2
           ld.lld --version
           llvm-nm --version 2>/dev/null | head -n1
-          echo "CC=${CC:-<unset>} LD=${LD:-<unset>} NM=${NM:-<unset>}"
           echo "=== LTO / compiler symbols in out/.config ==="
           grep -E 'CONFIG_(LTO|CC_IS_CLANG|LD_IS_LLD|HAS_LTO|CLANG_VERSION)' out/.config \
             || echo "(no LTO symbols at all)"
-          echo "=== HAS_LTO_CLANG shell probes ==="
-          for tool in llvm-nm llvm-ar; do
-            echo "$tool --help[1]: $($tool --help 2>&1 | head -n1)"
-          done
-          echo "=== remaining HAS_LTO_CLANG deps in out/.config ==="
-          grep -E 'CONFIG_(ARCH_SUPPORTS_LTO|FTRACE_MCOUNT_USE_RECORDMCOUNT|KASAN|GCOV_KERNEL|SHADOW_CALL_STACK|CC_HAVE_SHADOW_CALL_STACK|DYNAMIC_FTRACE|FUNCTION_GRAPH_TRACER|FTRACE=|CFI_CLANG)' out/.config \
-            || echo "(none of these deps present in config)"
           echo "=== config size: $(wc -l < out/.config) lines ==="
           check() {
             grep -qx "$1" out/.config || {
@@ -104,26 +143,36 @@ jobs:
               exit 1
             }
           }
+          # Mandatory spec flags.
           check 'CONFIG_LTO_CLANG_THIN=y'
-          check 'CONFIG_CFI_CLANG=y'
-          check 'CONFIG_SHADOW_CALL_STACK=y'
-          check 'CONFIG_MODVERSIONS=y'
-          check 'CONFIG_MODULE_SCMVERSION=y'
-          check 'CONFIG_MODULE_FORCE_LOAD=y'
-          check 'CONFIG_MODULE_UNLOAD=y'
-          check 'CONFIG_KALLSYMS_ALL=y'
-          check 'CONFIG_KPROBES=y'
           check 'CONFIG_PREEMPT=y'
           check 'CONFIG_HZ=300'
-          check 'CONFIG_TCP_CONG_BBR=y'
-          check 'CONFIG_DEFAULT_BBR=y'
-          check 'CONFIG_NET_SCH_FQ=y'
           check 'CONFIG_CRYPTO_LZ4=y'
-          check 'CONFIG_ANDROID_KABI_RESERVE=y'
+          check 'CONFIG_NET_SCH_FQ=y'
+          check 'CONFIG_TCP_CONG_BBR=y'
+          check 'CONFIG_DEFAULT_TCP_CONG="bbr"'
+          check 'CONFIG_MODVERSIONS=y'
+          check 'CONFIG_MODULE_SCMVERSION=y'
+          # ABI-critical: must match the stock kernel the modules were built
+          # against. See the header of performance.fragment.
           check 'CONFIG_KASAN=y'
           check 'CONFIG_KASAN_HW_TAGS=y'
+          check 'CONFIG_TRANSPARENT_HUGEPAGE=y'
+          check 'CONFIG_TRANSPARENT_HUGEPAGE_MADVISE=y'
+          check 'CONFIG_LOCALVERSION_AUTO=y'
+          check 'CONFIG_LOCALVERSION="-android12-9-Satetsu-Shigure"'
+          # Module loading.
+          check 'CONFIG_MODULE_UNLOAD=y'
+          check 'CONFIG_MODULE_FORCE_LOAD=y'
+          check 'CONFIG_CFI_CLANG=y'
+          check 'CONFIG_SHADOW_CALL_STACK=y'
 
-          for bad in CONFIG_LTO_CLANG_FULL CONFIG_TRANSPARENT_HUGEPAGE CONFIG_MODULE_SIG CONFIG_STACKPROTECTOR_PER_TASK; do
+          for bad in CONFIG_LTO_CLANG_FULL \
+                     CONFIG_TRANSPARENT_HUGEPAGE_ALWAYS \
+                     CONFIG_TRANSPARENT_HUGEPAGE_LEGACY_SYSFS \
+                     CONFIG_MODULE_SIG \
+                     CONFIG_TRIM_UNUSED_KSYMS \
+                     CONFIG_STACKPROTECTOR_PER_TASK; do
             if grep -qx "${bad}=y" out/.config; then
               echo "FAIL: ${bad} must not be enabled"
               exit 1
@@ -138,10 +187,11 @@ jobs:
           name: failing-config
           if-no-files-found: ignore
           path: |
-            out/.config
-            build.log
+            src/out/.config
+            src/build.log
 
       - name: Build Image
+        working-directory: src
         run: |
           set -euo pipefail
           # -k keeps going after an error so one run reports every remaining
@@ -149,6 +199,7 @@ jobs:
           make -k O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-gnu- -j"$(nproc)" Image 2>&1 | tee build.log
 
       - name: Verify release string
+        working-directory: src
         run: |
           set -euo pipefail
           rel="$(make -s O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-gnu- kernelrelease | tail -n1)"
@@ -163,69 +214,17 @@ jobs:
           echo "RELEASE=$rel" >> "$GITHUB_ENV"
 
       - name: Verify vendor ABI
+        working-directory: src
         run: |
           set -euo pipefail
           # `make Image` links vmlinux, and link-vmlinux.sh runs modpost with
           # MODPOST_VMLINUX=1, which writes vmlinux.symvers. Module.symvers is
           # only produced by a modules build, which this job does not do.
-          symvers=out/vmlinux.symvers
-          ref=abi/x6882_kernel_required.tsv
-          for f in "$symvers" "$ref"; do
-            if [[ ! -s "$f" ]]; then
-              echo "FAIL: $f is missing"
-              ls -l out/*.symvers 2>/dev/null || echo "(no *.symvers in out/)"
-              exit 1
-            fi
-          done
-
-          want=$(grep -vc '^#' "$ref" || true)
-          echo "kernel exports: $(wc -l < "$symvers")"
-          echo "kernel-required vendor imports: $want"
-          echo "of the 2462 vendor imports, $((2462 - want)) are provided by the"
-          echo "vendor_dlkm and vendor_boot modules themselves, not by the kernel."
-
-          # vmlinux.symvers columns: CRC <TAB> symbol <TAB> module <TAB> export
-          # reference columns:       symbol <TAB> expected CRC
-          #
-          # FAIL only on a symbol the kernel does not export at all: that is an
-          # unresolved symbol at module load time and nothing can recover it.
-          #
-          # A CRC mismatch is NOT fatal. The stock ABI is produced by MediaTek's
-          # patched 5.10.226 tree, which is not this source base, so struct-tag
-          # CRCs cannot match by construction. CONFIG_MODULE_FORCE_LOAD=y makes
-          # the kernel accept each mismatch with a warning and a force-load
-          # taint -- the same mechanism the GrayRavens-Zenithed kernel that
-          # already runs on this device relies on. The match count is reported
-          # as a metric so a regression is visible.
-          awk -F'\t' '
-            /^#/ { next }
-            FNR==NR { want[$1]=$2; next }
-            { have[$2]=$1 }
-            END {
-              total=0; ok=0; bad=0; miss=0
-              for (s in want) {
-                total++
-                if (!(s in have)) {
-                  miss++
-                  printf "MISSING   %-42s expected %s\n", s, want[s]
-                } else if (tolower(have[s])==tolower(want[s])) {
-                  ok++
-                } else {
-                  bad++
-                  if (bad<=20) printf "MISMATCH  %-42s expected %s got %s\n", s, want[s], have[s]
-                }
-              }
-              printf "SUMMARY kernel-required=%d crc_ok=%d crc_mismatch=%d missing=%d\n", total, ok, bad, miss
-              if (!("module_layout" in have)) {
-                printf "FAIL: module_layout is not exported\n"
-                exit 2
-              }
-              exit (miss ? 1 : 0)
-            }
-          ' "$ref" "$symvers"
-
-          echo "ABI gate: every kernel-required symbol is exported."
-          echo "CRC mismatches above are expected and are force-loaded at runtime."
+          python3 abi/abi_gate.py \
+            out/vmlinux.symvers \
+            abi/x6882_kernel_required.tsv \
+            android/abi_gki_aarch64.xml \
+            "$EXPECTED_MODULE_LAYOUT"
 
       - name: Package AnyKernel3
         run: |
@@ -235,7 +234,7 @@ jobs:
           git clone --depth=1 -b android12-5.10 \
             https://github.com/XTENSEI/GrayRavens-anykernel.git ak3
           sed -i 's|^kernel.string=.*|kernel.string=Satetsu Shigure GKI 5.10 by Hiruko|' ak3/anykernel.sh
-          cp out/arch/arm64/boot/Image ak3/Image
+          cp src/out/arch/arm64/boot/Image ak3/Image
           rm -rf ak3/.git ak3/.github ak3/README.md
           ( cd ak3 && zip -r9 "../${zip}" . -x '*.git*' )
           sha256sum "$zip" > "${zip}.sha256"
@@ -250,9 +249,9 @@ jobs:
           path: |
             ${{ env.ZIP }}
             ${{ env.ZIP }}.sha256
-            out/arch/arm64/boot/Image
-            out/vmlinux.symvers
-            build.log
+            src/out/arch/arm64/boot/Image
+            src/out/vmlinux.symvers
+            src/build.log
 
       - name: Publish release
         if: startsWith(github.ref, 'refs/tags/v5.10-satetsu')
@@ -264,8 +263,9 @@ jobs:
             echo "Built from \`${GITHUB_SHA}\` on $(date -u +%Y-%m-%dT%H:%M:%SZ)."
             echo
             echo "- kernelrelease: \`${RELEASE}\`"
-            echo "- module_layout: \`$(awk '$2=="module_layout"{print $1}' out/vmlinux.symvers)\`"
-            echo "- Image bytes: $(stat -c%s out/arch/arm64/boot/Image)"
+            echo "- ACK source: \`${ACK_COMMIT}\` (${ACK_VERSION})"
+            echo "- module_layout: \`$(awk '$2=="module_layout"{print $1}' src/out/vmlinux.symvers)\`"
+            echo "- Image bytes: $(stat -c%s src/out/arch/arm64/boot/Image)"
             echo
             echo "Verify before flashing:"
             echo '```'
@@ -283,6 +283,6 @@ jobs:
           name: failure-diagnostics
           if-no-files-found: ignore
           path: |
-            out/.config
-            out/vmlinux.symvers
-            build.log
+            src/out/.config
+            src/out/vmlinux.symvers
+            src/build.log

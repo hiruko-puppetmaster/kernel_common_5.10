@@ -1,0 +1,38 @@
+From: Satetsu Shigure <satetsu@x6882.invalid>
+Subject: [PATCH] arm64: default STACKPROTECTOR_PER_TASK off for X6882 ABI parity
+
+The stock X6882 kernel was built with clang 12, which has no
+-mstack-protector-guard=sysreg support, so Kconfig left
+STACKPROTECTOR_PER_TASK unset and arch/arm64/kernel/process.c defined and
+exported a global __stack_chk_guard.
+
+Every one of the 186 vendor modules imports __stack_chk_guard. With a
+modern clang (>= 12 with the sysreg guard) Kconfig defaults the option to
+y, the export disappears, and no vendor module can resolve the symbol.
+
+The security property is unchanged: the canary still exists and is still
+checked on every function return. Only the storage moves from a per-cpu
+slot to a global, which is exactly what the device's modules were built
+against.
+
+Signed-off-by: Satetsu Shigure <satetsu@x6882.invalid>
+---
+--- a/arch/arm64/Kconfig
++++ b/arch/arm64/Kconfig
+@@ -2079,7 +2079,15 @@
+ 	def_bool $(cc-option,-mstack-protector-guard=sysreg -mstack-protector-guard-reg=sp_el0 -mstack-protector-guard-offset=0)
+ 
+ config STACKPROTECTOR_PER_TASK
+-	def_bool y
++	# X6882: forced off for vendor-module ABI parity. The stock kernel and
++	# every vendor module were built with clang 12, which cannot use the
++	# sysreg stack guard, so arch/arm64/kernel/process.c defines and exports
++	# a plain __stack_chk_guard instead of a per-cpu one. Every vendor module
++	# imports __stack_chk_guard; with the per-task guard enabled the symbol is
++	# not exported at all and no module can load. The guard itself is still
++	# present and still checked; only its storage moves from per-cpu to global,
++	# which is what this device's module ABI requires.
++	def_bool n
+ 	depends on STACKPROTECTOR && CC_HAVE_STACKPROTECTOR_SYSREG
+ 
+ endmenu

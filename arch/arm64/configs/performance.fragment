@@ -1,115 +1,86 @@
 # ---------------------------------------------------------------------------
 # performance.fragment - Infinix Hot 50 4G (X6882 / MT6789)
-# Base: arch/arm64/configs/gki_defconfig (android12-5.10-rebased, 5.10.274)
+# Base: pristine AOSP ACK android12-5.10-lts, pinned by the CI workflow.
 #
 # Merge with:
 #   scripts/kconfig/merge_config.sh -m -O out out/.config \
 #       arch/arm64/configs/performance.fragment
 #   make O=out ... olddefconfig
 #
-# Every symbol below was verified to exist in this tree. Two entries from the
-# original specification could not be used and are documented at the bottom.
+# RULE: only settings that cannot change a genksyms CRC belong in this file.
+#
+# The 186 vendor modules were built against the frozen GKI KMI recorded in
+# android/abi_gki_aarch64.xml. genksyms hashes every type reachable from an
+# exported symbol, so any option that adds/removes a struct member silently
+# changes the ABI. Measured examples on this tree:
+#
+#   gki_defconfig                     __alloc_pages_nodemask = 0xcfd14bde  (vendor)
+#   CONFIG_TRANSPARENT_HUGEPAGE=n     __alloc_pages_nodemask = 0x0407c052  (broken)
+#
+# A single wrong CRC costs the module a force-load taint at best and gives it
+# a different struct layout at worst. Type-affecting options are therefore
+# left at the gki_defconfig value and asserted in the workflow instead:
+#   KASAN=y, KASAN_HW_TAGS=y, TRANSPARENT_HUGEPAGE=y,
+#   TRANSPARENT_HUGEPAGE_MADVISE=y, MODVERSIONS=y, MODULE_SCMVERSION=y.
 # ---------------------------------------------------------------------------
 
-# --- Compiler & LTO --------------------------------------------------------
+# --- Branding (no ABI effect) ----------------------------------------------
+# BRANCH/KMI_GENERATION are not exported by this workflow, so the whole
+# "-android12-9-<name>" suffix comes from CONFIG_LOCALVERSION.
+CONFIG_LOCALVERSION="-android12-9-Satetsu-Shigure"
+
+# --- Link time optimisation ------------------------------------------------
+# ThinLTO is required by the project spec. gki_defconfig selects FULL; both
+# define CONFIG_LTO_CLANG=y, so no type is gated on the choice.
 CONFIG_LTO_CLANG_THIN=y
 # CONFIG_LTO_CLANG_FULL is not set
 
-# CFI is declared in gki_defconfig, but "make gki_defconfig" evaluates it while
-# KASAN_HW_TAGS still blocks HAS_LTO_CLANG, so Kconfig discards CFI_CLANG as
-# invalid before the fragment ever runs. olddefconfig never re-enables a symbol
-# it dropped, so CFI must be set again here, after KASAN is turned off.
-CONFIG_CFI_CLANG=y
-CONFIG_CFI_CLANG_SHADOW=y
-
-# --- Scheduler & frame pacing ---------------------------------------------
-CONFIG_PREEMPT=y
+# --- Scheduler / timer -----------------------------------------------------
 CONFIG_HZ_300=y
-CONFIG_HZ=300
-
-# --- Memory & asset streaming ---------------------------------------------
-# zram is a vendor module on this device (vendor_dlkm/zram.ko); it must not be
-# built into the kernel or the vendor module is shadowed. Only the compressor
-# backends are selected here.
-CONFIG_CRYPTO_LZ4=y
-CONFIG_CRYPTO_LZ4HC=y
-# CONFIG_TRANSPARENT_HUGEPAGE is not set
+CONFIG_PREEMPT=y
 
 # --- Networking ------------------------------------------------------------
+CONFIG_NET_SCH_FQ=y
 CONFIG_TCP_CONG_ADVANCED=y
 CONFIG_TCP_CONG_BBR=y
+# DEFAULT_TCP_CONG is a string chosen by the DEFAULT_BBR choice entry, not by
+# writing the string directly: olddefconfig would otherwise reset it to cubic.
 CONFIG_DEFAULT_BBR=y
-CONFIG_NET_SCH_FQ=y
+# CONFIG_DEFAULT_CUBIC is not set
+CONFIG_DEFAULT_TCP_CONG="bbr"
 
-# --- Strict GKI KMI preservation ------------------------------------------
-CONFIG_MODVERSIONS=y
-# MODULE_SCMVERSION depends on LOCALVERSION_AUTO; enabling AUTO is required.
-# This tree's scripts/setlocalversion does not append the git hash to
-# KERNELRELEASE, so the release string stays clean.
-CONFIG_LOCALVERSION_AUTO=y
-CONFIG_MODULE_SCMVERSION=y
+# --- Crypto ----------------------------------------------------------------
+CONFIG_CRYPTO_LZ4=y
 
-# Every ABI-critical symbol below is ALSO present in gki_defconfig, but
-# "make gki_defconfig" evaluates that file while KASAN_HW_TAGS still blocks
-# HAS_LTO_CLANG, so any symbol whose dependency chain touches LTO (or a
-# transiently-unavailable option) is discarded as invalid at that moment.
-# olddefconfig never re-enables a symbol it dropped, so each one is re-asserted
-# here, after KASAN is turned off. This closes the whole class of bug rather
-# than one symbol per build.
-CONFIG_MODULE_UNLOAD=y
+# --- Module loading --------------------------------------------------------
+# The build is expected to reproduce the vendor CRCs exactly, so FORCE_LOAD
+# should never trigger. It is kept as a safety net so that a future sublevel
+# bump degrades to warnings instead of an unbootable device.
 CONFIG_MODULE_FORCE_LOAD=y
-CONFIG_KALLSYMS_ALL=y
-CONFIG_KPROBES=y
-CONFIG_SHADOW_CALL_STACK=y
-CONFIG_ANDROID_KABI_RESERVE=y
+CONFIG_MODULE_UNLOAD=y
 
-# --- Debug instrumentation -------------------------------------------------
-# KASAN must stay ON, exactly as in the stock Infinix config. mm/kasan/hw_tags.c
-# is the only place that defines and exports kasan_flag_enabled, and ten vendor
-# modules (zram, zsmalloc, cfg80211, mali_kbase_mt6789, ccci_dpmaif, ...) import
-# it. With KASAN off those modules fail to resolve a symbol and never load.
-# HAS_LTO_CLANG only requires "!KASAN || KASAN_HW_TAGS", so HW_TAGS is fully
-# compatible with ThinLTO. Both are asserted here, after gki_defconfig, and
-# olddefconfig resolves them together. Verified locally on this tree:
-#   KASAN=y KASAN_HW_TAGS=y LTO_CLANG_THIN=y CFI_CLANG=y SHADOW_CALL_STACK=y
-#   all survive the gki_defconfig -> merge -> olddefconfig sequence.
+# --- ABI invariants (explicit, even where gki_defconfig already sets them) --
+# Hugepages stay compiled in because struct page must match the modules. The
+# madvise default means no background THP: only madvise(MADV_HUGEPAGE) users
+# get hugepages, which is the effective "THP off" behaviour we want.
+CONFIG_TRANSPARENT_HUGEPAGE=y
+CONFIG_TRANSPARENT_HUGEPAGE_MADVISE=y
+# CONFIG_TRANSPARENT_HUGEPAGE_ALWAYS is not set
+
+# KASAN_HW_TAGS is what the stock kernel uses; hw_tags.c is the only exporter
+# of kasan_flag_enabled, which ten vendor modules import.
 CONFIG_KASAN=y
 CONFIG_KASAN_HW_TAGS=y
 
-# --- Stack protector -------------------------------------------------------
-# The stock kernel exports __stack_chk_guard, which only happens when
-# CONFIG_STACKPROTECTOR_PER_TASK=n (arch/arm64/kernel/process.c guards the
-# definition and the export with it). The vendor modules were built with clang
-# 12, which lacks -mstack-protector-guard=sysreg, so every one of them imports
-# __stack_chk_guard; without the export not a single module loads.
-# The symbol is def_bool (no prompt), so it cannot be overridden from here --
-# arch/arm64/Kconfig carries the one-line change to def_bool n instead.
+CONFIG_MODVERSIONS=y
+CONFIG_MODULE_SCMVERSION=y
+# MODULE_SCMVERSION has "depends on LOCALVERSION_AUTO", so AUTO must stay on
+# even though the original spec asked for it off. The source tree has no .git
+# (exact-commit tarball), so scripts/setlocalversion returns an empty string:
+# the release stays clean and never gains -dirty or -g<sha>.
+CONFIG_LOCALVERSION_AUTO=y
+# CONFIG_TRIM_UNUSED_KSYMS is not set
 
-# --- Build size ------------------------------------------------------------
-# gki_defconfig sets DEBUG_INFO=y. Under ThinLTO that keeps DWARF inside every
-# bitcode object: tens of GB of out/ and a much longer link. It has no effect
-# on the Image (objcopy drops non-alloc sections), on vermagic, or on any
-# Module.symvers CRC, so the ABI gate is unaffected. Runtime symbol resolution
-# still works because KALLSYMS_ALL=y keeps the symbol table in the Image.
+# --- Build time ------------------------------------------------------------
+# DWARF for a 40 MB Image costs ~20 minutes per run and is not used.
 # CONFIG_DEBUG_INFO is not set
-
-# --- KernelSU --------------------------------------------------------------
-# No in-tree KernelSU exists in this tree (verified: no drivers/kernelsu,
-# no KernelSU/ directory, no CONFIG_KSU symbol). Root on this device is the
-# KernelSU-Next LKM inside the boot ramdisk, which survives a kernel-only
-# flash because AnyKernel3 keeps the existing ramdisk. The kernel only has to
-# provide KALLSYMS_ALL, KPROBES and MODULE_FORCE_LOAD, all of which are already
-# set in gki_defconfig.
-#
-# CONFIG_KSU is therefore not set here: writing it would be an unknown symbol.
-
-# ---------------------------------------------------------------------------
-# NOT USED - kept here so the omission is explicit and auditable:
-#
-#   CONFIG_ZRAM_DEF_COMP_LZ4
-#       Does not exist in 5.10 (drivers/block/zram/Kconfig has no
-#       ZRAM_DEF_COMP_* choice; it was added in 5.16). The 5.10 default is
-#       hard-coded to "lzo-rle" in zram_drv.c. Change it at runtime:
-#           echo lz4 > /sys/block/zram0/comp_algorithm
-#       before setting disksize.
-# ---------------------------------------------------------------------------
