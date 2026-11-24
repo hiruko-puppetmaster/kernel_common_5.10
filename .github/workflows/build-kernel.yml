@@ -259,6 +259,17 @@ jobs:
           git clone --depth=1 -b android12-5.10 \
             https://github.com/XTENSEI/GrayRavens-anykernel.git ak3
           sed -i 's|^kernel.string=.*|kernel.string=Satetsu Shigure GKI 5.10 by Hiruko|' ak3/anykernel.sh
+          # The upstream banner still says GRAYRAVENS; the project banner is
+          # "Satetsu Shigure GKI 5.10 by Hiruko" (kernel.string above, and the
+          # flash-time ui_print block here).
+          sed -i 's|^ui_print "  G R A Y R A V E N S"$|ui_print "  S A T E T S U   S H I G U R E"|' \
+            ak3/anykernel.sh
+          sed -i 's|^ui_print "  G K I   K E R N E L"$|ui_print "  G K I   5 . 1 0"|' \
+            ak3/anykernel.sh
+          grep -q 'S A T E T S U' ak3/anykernel.sh || {
+            echo "FAIL: recovery banner was not rebranded"; exit 1; }
+          grep -q '^kernel.string=Satetsu Shigure GKI 5.10 by Hiruko$' ak3/anykernel.sh || {
+            echo "FAIL: kernel.string was not rebranded"; exit 1; }
           cp "$KSRC/out/arch/arm64/boot/Image" ak3/Image
           rm -rf ak3/.git ak3/.github ak3/README.md
           ( cd ak3 && zip -r9 "../${zip}" . -x '*.git*' )
@@ -272,8 +283,8 @@ jobs:
           name: satetsu-shigure-gki510
           if-no-files-found: error
           path: |
-            ${{ env.ZIP }}
-            ${{ env.ZIP }}.sha256
+            ${{ github.workspace }}/${{ env.ZIP }}
+            ${{ github.workspace }}/${{ env.ZIP }}.sha256
             ${{ env.KSRC }}/out/arch/arm64/boot/Image
             ${{ env.KSRC }}/out/vmlinux.symvers
             ${{ env.KSRC }}/build.log
