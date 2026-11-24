@@ -79,6 +79,15 @@ jobs:
       - name: Assert ABI-critical config
         run: |
           set -euo pipefail
+          echo "=== toolchain as Kconfig sees it ==="
+          clang --version | head -n2
+          ld.lld --version
+          llvm-nm --version 2>/dev/null | head -n1
+          echo "CC=${CC:-<unset>} LD=${LD:-<unset>} NM=${NM:-<unset>}"
+          echo "=== LTO / compiler symbols in out/.config ==="
+          grep -E 'CONFIG_(LTO|CC_IS_CLANG|LD_IS_LLD|HAS_LTO|CLANG_VERSION)' out/.config \
+            || echo "(no LTO symbols at all)"
+          echo "=== config size: $(wc -l < out/.config) lines ==="
           check() {
             grep -qx "$1" out/.config || {
               echo "FAIL: expected '$1'"
