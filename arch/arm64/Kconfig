@@ -2081,7 +2081,15 @@ config CC_HAVE_STACKPROTECTOR_SYSREG
 	def_bool $(cc-option,-mstack-protector-guard=sysreg -mstack-protector-guard-reg=sp_el0 -mstack-protector-guard-offset=0)
 
 config STACKPROTECTOR_PER_TASK
-	def_bool y
+	# X6882: forced off for vendor-module ABI parity. The stock kernel and
+	# every vendor module were built with clang 12, which cannot use the
+	# sysreg stack guard, so arch/arm64/kernel/process.c defines and exports
+	# a plain __stack_chk_guard instead of a per-cpu one. Every vendor module
+	# imports __stack_chk_guard; with the per-task guard enabled the symbol is
+	# not exported at all and no module can load. The security difference is
+	# nil (the guard still exists and is still checked), only the storage
+	# moves from per-cpu to global, which is what this device's ABI requires.
+	def_bool n
 	depends on STACKPROTECTOR && CC_HAVE_STACKPROTECTOR_SYSREG
 
 endmenu

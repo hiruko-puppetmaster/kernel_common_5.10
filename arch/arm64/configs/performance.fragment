@@ -64,13 +64,26 @@ CONFIG_SHADOW_CALL_STACK=y
 CONFIG_ANDROID_KABI_RESERVE=y
 
 # --- Debug instrumentation -------------------------------------------------
-# gki_defconfig sets KASAN=y + KASAN_HW_TAGS=y. arch/Kconfig's HAS_LTO_CLANG
-# has "depends on !KASAN || KASAN_HW_TAGS", so KASAN state silently gates the
-# entire LTO choice: if KASAN_HW_TAGS fails to resolve, LTO falls back to
-# LTO_NONE and CONFIG_LTO_CLANG_THIN disappears. KASAN is ABI-neutral and
-# costs a lot of build time and runtime memory, so it is dropped here.
-# CONFIG_KASAN is not set
-# CONFIG_KASAN_HW_TAGS is not set
+# KASAN must stay ON, exactly as in the stock Infinix config. mm/kasan/hw_tags.c
+# is the only place that defines and exports kasan_flag_enabled, and ten vendor
+# modules (zram, zsmalloc, cfg80211, mali_kbase_mt6789, ccci_dpmaif, ...) import
+# it. With KASAN off those modules fail to resolve a symbol and never load.
+# HAS_LTO_CLANG only requires "!KASAN || KASAN_HW_TAGS", so HW_TAGS is fully
+# compatible with ThinLTO. Both are asserted here, after gki_defconfig, and
+# olddefconfig resolves them together. Verified locally on this tree:
+#   KASAN=y KASAN_HW_TAGS=y LTO_CLANG_THIN=y CFI_CLANG=y SHADOW_CALL_STACK=y
+#   all survive the gki_defconfig -> merge -> olddefconfig sequence.
+CONFIG_KASAN=y
+CONFIG_KASAN_HW_TAGS=y
+
+# --- Stack protector -------------------------------------------------------
+# The stock kernel exports __stack_chk_guard, which only happens when
+# CONFIG_STACKPROTECTOR_PER_TASK=n (arch/arm64/kernel/process.c guards the
+# definition and the export with it). The vendor modules were built with clang
+# 12, which lacks -mstack-protector-guard=sysreg, so every one of them imports
+# __stack_chk_guard; without the export not a single module loads.
+# The symbol is def_bool (no prompt), so it cannot be overridden from here --
+# arch/arm64/Kconfig carries the one-line change to def_bool n instead.
 
 # --- Build size ------------------------------------------------------------
 # gki_defconfig sets DEBUG_INFO=y. Under ThinLTO that keeps DWARF inside every
