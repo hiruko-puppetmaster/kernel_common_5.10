@@ -401,16 +401,6 @@ static inline void lockdep_unregister_key(struct lock_class_key *key)
 
 #define lockdep_depth(tsk)	(0)
 
-/*
- * Dummy forward declarations, allow users to write less ifdef-y code
- * and depend on dead code elimination. Needed because RCU_LOCKDEP_WARN()
- * keeps its condition referenced (0 && (c)) so that variables used only in
- * lockdep conditions do not trip -Wunused-variable; without these
- * declarations the same expressions trip -Wimplicit-function-declaration.
- */
-extern int lock_is_held(const void *);
-extern int lockdep_is_held(const void *);
-
 #define lockdep_is_held_type(l, r)		(1)
 
 #define lockdep_assert(c)			do { } while (0)

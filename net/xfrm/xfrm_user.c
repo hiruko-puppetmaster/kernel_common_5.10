@@ -36,8 +36,12 @@
 
 static struct sock *xfrm_net_nlsk(const struct net *net, const struct sk_buff *skb)
 {
-	/* get the source of this request, see netlink_unicast_kernel */
-	const struct sock *sk = NETLINK_CB(skb).sk;
+	/*
+	 * get the source of this request, see netlink_unicast_kernel.
+	 * @sk is only referenced from the rcu_dereference_protected()
+	 * condition below, which is compiled out when PROVE_RCU is off.
+	 */
+	const struct sock *sk __maybe_unused = NETLINK_CB(skb).sk;
 
 	/* sk is refcounted, the netns stays alive and nlsk with it */
 	return rcu_dereference_protected(net->xfrm.nlsk, sk->sk_net_refcnt);
