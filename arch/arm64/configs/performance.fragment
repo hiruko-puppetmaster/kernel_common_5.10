@@ -15,6 +15,13 @@
 CONFIG_LTO_CLANG_THIN=y
 # CONFIG_LTO_CLANG_FULL is not set
 
+# CFI is declared in gki_defconfig, but "make gki_defconfig" evaluates it while
+# KASAN_HW_TAGS still blocks HAS_LTO_CLANG, so Kconfig discards CFI_CLANG as
+# invalid before the fragment ever runs. olddefconfig never re-enables a symbol
+# it dropped, so CFI must be set again here, after KASAN is turned off.
+CONFIG_CFI_CLANG=y
+CONFIG_CFI_CLANG_SHADOW=y
+
 # --- Scheduler & frame pacing ---------------------------------------------
 CONFIG_PREEMPT=y
 CONFIG_HZ_300=y
