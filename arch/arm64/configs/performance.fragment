@@ -1,0 +1,72 @@
+# ---------------------------------------------------------------------------
+# performance.fragment - Infinix Hot 50 4G (X6882 / MT6789)
+# Base: arch/arm64/configs/gki_defconfig (android12-5.10-rebased, 5.10.274)
+#
+# Merge with:
+#   scripts/kconfig/merge_config.sh -m -O out out/.config \
+#       arch/arm64/configs/performance.fragment
+#   make O=out ... olddefconfig
+#
+# Every symbol below was verified to exist in this tree. Two entries from the
+# original specification could not be used and are documented at the bottom.
+# ---------------------------------------------------------------------------
+
+# --- Compiler & LTO --------------------------------------------------------
+CONFIG_LTO_CLANG_THIN=y
+# CONFIG_LTO_CLANG_FULL is not set
+
+# --- Scheduler & frame pacing ---------------------------------------------
+CONFIG_PREEMPT=y
+CONFIG_HZ_300=y
+CONFIG_HZ=300
+
+# --- Memory & asset streaming ---------------------------------------------
+# zram is a vendor module on this device (vendor_dlkm/zram.ko); it must not be
+# built into the kernel or the vendor module is shadowed. Only the compressor
+# backends are selected here.
+CONFIG_CRYPTO_LZ4=y
+CONFIG_CRYPTO_LZ4HC=y
+# CONFIG_TRANSPARENT_HUGEPAGE is not set
+
+# --- Networking ------------------------------------------------------------
+CONFIG_TCP_CONG_ADVANCED=y
+CONFIG_TCP_CONG_BBR=y
+CONFIG_DEFAULT_BBR=y
+CONFIG_NET_SCH_FQ=y
+
+# --- Strict GKI KMI preservation ------------------------------------------
+CONFIG_MODVERSIONS=y
+# MODULE_SCMVERSION depends on LOCALVERSION_AUTO; enabling AUTO is required.
+# This tree's scripts/setlocalversion does not append the git hash to
+# KERNELRELEASE, so the release string stays clean.
+CONFIG_LOCALVERSION_AUTO=y
+CONFIG_MODULE_SCMVERSION=y
+
+# --- Build size ------------------------------------------------------------
+# gki_defconfig sets DEBUG_INFO=y. Under ThinLTO that keeps DWARF inside every
+# bitcode object: tens of GB of out/ and a much longer link. It has no effect
+# on the Image (objcopy drops non-alloc sections), on vermagic, or on any
+# Module.symvers CRC, so the ABI gate is unaffected. Runtime symbol resolution
+# still works because KALLSYMS_ALL=y keeps the symbol table in the Image.
+# CONFIG_DEBUG_INFO is not set
+
+# --- KernelSU --------------------------------------------------------------
+# No in-tree KernelSU exists in this tree (verified: no drivers/kernelsu,
+# no KernelSU/ directory, no CONFIG_KSU symbol). Root on this device is the
+# KernelSU-Next LKM inside the boot ramdisk, which survives a kernel-only
+# flash because AnyKernel3 keeps the existing ramdisk. The kernel only has to
+# provide KALLSYMS_ALL, KPROBES and MODULE_FORCE_LOAD, all of which are already
+# set in gki_defconfig.
+#
+# CONFIG_KSU is therefore not set here: writing it would be an unknown symbol.
+
+# ---------------------------------------------------------------------------
+# NOT USED - kept here so the omission is explicit and auditable:
+#
+#   CONFIG_ZRAM_DEF_COMP_LZ4
+#       Does not exist in 5.10 (drivers/block/zram/Kconfig has no
+#       ZRAM_DEF_COMP_* choice; it was added in 5.16). The 5.10 default is
+#       hard-coded to "lzo-rle" in zram_drv.c. Change it at runtime:
+#           echo lz4 > /sys/block/zram0/comp_algorithm
+#       before setting disksize.
+# ---------------------------------------------------------------------------

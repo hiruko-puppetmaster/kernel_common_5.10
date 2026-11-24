@@ -760,5 +760,5 @@ CONFIG_NET_SCH_DEFAULT=y
 CONFIG_DEFAULT_CAKE=y
 
 # GrayRavens branding (shows in uname -r / uname -n)
-CONFIG_LOCALVERSION="-GrayRavens-Zenithed-Stable"
+CONFIG_LOCALVERSION="-android12-9-Satetsu-Shigure"
 CONFIG_DEFAULT_HOSTNAME="grayravens"

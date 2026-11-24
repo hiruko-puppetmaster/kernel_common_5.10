@@ -1,0 +1,189 @@
+# Build Satetsu Shigure - GKI 5.10 for Infinix Hot 50 4G (X6882 / MT6789)
+#
+# Runs on an x86_64 Linux host, which is the platform the AOSP kernel build
+# system and arch/arm64/configs/gki_defconfig are written for. This supersedes
+# the local aarch64/Termux attempt, which could not survive PRoot futex faults.
+#
+# Per run this produces:
+#   Satetsu-Shigure-X6882-GKI510-v5.10-satetsu-<UTC>.zip   AnyKernel3, ready to flash
+#   <zip>.sha256
+#   out/arch/arm64/boot/Image
+#   out/Module.symvers    -> feed to knowledge/check_vendor_crcs.sh for the
+#                            full 2,462-symbol vendor ABI gate
+#   build.log
+
+name: Build Satetsu Shigure GKI 5.10
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v5.10-satetsu*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Image (arm64, ThinLTO + CFI)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+
+    env:
+      KBUILD_BUILD_USER: hiruko
+      KBUILD_BUILD_HOST: Sunagakure
+      EXPECTED_MODULE_LAYOUT: '0x7c24b32d'
+
+    steps:
+      - name: Reclaim disk space
+        run: |
+          set -euo pipefail
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost \
+                      /usr/lib/jvm /usr/share/swift /opt/microsoft /usr/local/aws-cli
+          sudo apt-get clean
+          df -h /
+
+      - name: Install toolchain
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            clang-18 lld-18 llvm-18 bc bison flex libelf-dev libssl-dev \
+            python3 cpio rsync zip unzip xz-utils zstd
+          echo "/usr/lib/llvm-18/bin" >> "$GITHUB_PATH"
+
+      - name: Record toolchain
+        run: |
+          set -euo pipefail
+          export PATH="/usr/lib/llvm-18/bin:$PATH"
+          clang --version
+          ld.lld --version
+          make --version | head -n1
+          echo "cpus: $(nproc)"
+          df -h /
+
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Configure
+        run: |
+          set -euo pipefail
+          make O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 gki_defconfig
+          scripts/kconfig/merge_config.sh -m -O out out/.config \
+            arch/arm64/configs/performance.fragment
+          make O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 olddefconfig
+
+      - name: Assert ABI-critical config
+        run: |
+          set -euo pipefail
+          check() {
+            grep -qx "$1" out/.config || {
+              echo "FAIL: expected '$1'"
+              grep -E "^${1%%=*}=" out/.config || echo "  (symbol absent)"
+              exit 1
+            }
+          }
+          check 'CONFIG_LTO_CLANG_THIN=y'
+          check 'CONFIG_CFI_CLANG=y'
+          check 'CONFIG_SHADOW_CALL_STACK=y'
+          check 'CONFIG_MODVERSIONS=y'
+          check 'CONFIG_MODULE_SCMVERSION=y'
+          check 'CONFIG_MODULE_FORCE_LOAD=y'
+          check 'CONFIG_MODULE_UNLOAD=y'
+          check 'CONFIG_KALLSYMS_ALL=y'
+          check 'CONFIG_KPROBES=y'
+          check 'CONFIG_PREEMPT=y'
+          check 'CONFIG_HZ=300'
+          check 'CONFIG_TCP_CONG_BBR=y'
+          check 'CONFIG_DEFAULT_BBR=y'
+          check 'CONFIG_NET_SCH_FQ=y'
+          check 'CONFIG_CRYPTO_LZ4=y'
+          check 'CONFIG_ANDROID_KABI_RESERVE=y'
+
+          for bad in CONFIG_LTO_CLANG_FULL CONFIG_TRANSPARENT_HUGEPAGE CONFIG_MODULE_SIG; do
+            if grep -qx "${bad}=y" out/.config; then
+              echo "FAIL: ${bad} must not be enabled"
+              exit 1
+            fi
+          done
+          echo "config assertions: OK"
+
+      - name: Build Image
+        run: |
+          set -euo pipefail
+          make O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 -j"$(nproc)" Image 2>&1 | tee build.log
+
+      - name: Verify release string
+        run: |
+          set -euo pipefail
+          rel="$(make -s O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 kernelrelease | tail -n1)"
+          echo "kernelrelease: $rel"
+          # Spec: 5.10.xxx-android12-9<KERNEL_NAME>, never -dirty.
+          if [[ ! "$rel" =~ ^5\.10\.[0-9]+-android12-9-Satetsu-Shigure$ ]]; then
+            echo "FAIL: release string violates the required form"
+            exit 1
+          fi
+          test -s out/arch/arm64/boot/Image
+          ls -l out/arch/arm64/boot/Image
+          echo "RELEASE=$rel" >> "$GITHUB_ENV"
+
+      - name: Verify vendor ABI
+        run: |
+          set -euo pipefail
+          # Module.symvers columns: CRC <TAB> symbol <TAB> module <TAB> export
+          ml="$(awk '$2=="module_layout"{print $1}' out/Module.symvers)"
+          echo "module_layout: ${ml:-<absent>} (expected $EXPECTED_MODULE_LAYOUT)"
+          test "$ml" = "$EXPECTED_MODULE_LAYOUT"
+          echo "exported symbols: $(wc -l < out/Module.symvers)"
+
+      - name: Package AnyKernel3
+        run: |
+          set -euo pipefail
+          utc="$(date -u +%Y%m%dT%H%M%SZ)"
+          zip="Satetsu-Shigure-X6882-GKI510-v5.10-satetsu-${utc}.zip"
+          git clone --depth=1 -b android12-5.10 \
+            https://github.com/XTENSEI/GrayRavens-anykernel.git ak3
+          sed -i 's|^kernel.string=.*|kernel.string=Satetsu Shigure GKI 5.10 by Hiruko|' ak3/anykernel.sh
+          cp out/arch/arm64/boot/Image ak3/Image
+          rm -rf ak3/.git ak3/.github ak3/README.md
+          ( cd ak3 && zip -r9 "../${zip}" . -x '*.git*' )
+          sha256sum "$zip" > "${zip}.sha256"
+          cat "${zip}.sha256"
+          echo "ZIP=${zip}" >> "$GITHUB_ENV"
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: satetsu-shigure-gki510
+          if-no-files-found: error
+          path: |
+            ${{ env.ZIP }}
+            ${{ env.ZIP }}.sha256
+            out/arch/arm64/boot/Image
+            out/Module.symvers
+            build.log
+
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/v5.10-satetsu')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          {
+            echo "Built from \`${GITHUB_SHA}\` on $(date -u +%Y-%m-%dT%H:%M:%SZ)."
+            echo
+            echo "- kernelrelease: \`${RELEASE}\`"
+            echo "- module_layout: \`$(awk '$2=="module_layout"{print $1}' out/Module.symvers)\`"
+            echo "- Image bytes: $(stat -c%s out/arch/arm64/boot/Image)"
+            echo
+            echo "Verify before flashing:"
+            echo '```'
+            echo "sha256sum -c ${ZIP}.sha256"
+            echo '```'
+          } > release-notes.md
+          gh release create "$GITHUB_REF_NAME" "$ZIP" "$ZIP.sha256" \
+            --title "Satetsu Shigure (GKI 5.10 - X6882)" \
+            --notes-file release-notes.md
