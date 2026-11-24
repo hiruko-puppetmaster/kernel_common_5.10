@@ -270,7 +270,17 @@ jobs:
             echo "FAIL: recovery banner was not rebranded"; exit 1; }
           grep -q '^kernel.string=Satetsu Shigure GKI 5.10 by Hiruko$' ak3/anykernel.sh || {
             echo "FAIL: kernel.string was not rebranded"; exit 1; }
-          cp "$KSRC/out/arch/arm64/boot/Image" ak3/Image
+          # Ship gzip, matching the stock boot payload exactly: backup_v1379/
+          # boot.img is header v4 with the kernel at offset 4096 starting
+          # "1f 8b 08". AnyKernel3 hands whichever file it finds straight to
+          # `magiskboot repack`, which does not recompress, so a raw Image
+          # would silently change the boot format.
+          gzip -9 -n -c "$KSRC/out/arch/arm64/boot/Image" > ak3/Image.gz
+          test ! -e ak3/Image
+          raw="$(sha256sum "$KSRC/out/arch/arm64/boot/Image" | cut -d' ' -f1)"
+          gz="$(gzip -dc ak3/Image.gz | sha256sum | cut -d' ' -f1)"
+          [[ "$raw" == "$gz" ]] || { echo "FAIL: Image.gz does not round-trip"; exit 1; }
+          echo "kernel payload: Image.gz $(stat -c%s ak3/Image.gz) bytes (raw $raw)"
           rm -rf ak3/.git ak3/.github ak3/README.md
           ( cd ak3 && zip -r9 "../${zip}" . -x '*.git*' )
           sha256sum "$zip" > "${zip}.sha256"
