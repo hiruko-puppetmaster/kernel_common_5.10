@@ -1,0 +1,48 @@
+# Droidspaces full-desktop container support for X6882 (MT6789).
+# Merged on top of gki_defconfig + performance.fragment.
+# Every option must be built in (=y): boot.img cannot load new modules.
+#
+# ABI SAFETY: each option below was verified by regenerating genksyms CRCs for
+# witness objects and comparing them with the vendor values (init_net
+# 0xc427c067, __put_task_struct 0x9a80f9a6). Three options from Droidspaces'
+# upstream list are deliberately absent because they change a struct that
+# vendor modules depend on; see the notes at the bottom.
+
+# --- core namespaces & IPC (protected by patches/0002 and 0003) ---
+CONFIG_NAMESPACES=y
+CONFIG_PID_NS=y
+CONFIG_UTS_NS=y
+CONFIG_IPC_NS=y
+CONFIG_SYSVIPC=y
+CONFIG_POSIX_MQUEUE=y
+
+# --- devtmpfs / tmpfs primitives for systemd and X11 ---
+CONFIG_DEVTMPFS=y
+# CONFIG_DEVTMPFS_MOUNT is not set
+CONFIG_TMPFS_XATTR=y
+CONFIG_TMPFS_POSIX_ACL=y
+
+# --- NAT / IPv6 networking inside the container ---
+CONFIG_NETFILTER_ADVANCED=y
+CONFIG_NETFILTER_XT_MATCH_ADDRTYPE=y
+CONFIG_MACVLAN=y
+CONFIG_IP6_NF_IPTABLES=y
+CONFIG_IP6_NF_FILTER=y
+CONFIG_IP6_NF_MANGLE=y
+CONFIG_IP6_NF_NAT=y
+CONFIG_IP6_NF_TARGET_MASQUERADE=y
+
+# --- explicitly excluded: KMI-breaking or unneeded without Docker ---
+# CONFIG_USER_NS is not set
+# CONFIG_CFS_BANDWIDTH is not set
+# CONFIG_CGROUP_PIDS is not set
+
+# --- excluded for measured ABI reasons, do not re-enable ---
+# CONFIG_CGROUP_DEVICE is not set
+#   CGROUP_SUBSYS_COUNT feeds struct css_set.subsys[]; adding a controller
+#   re-sizes it and shifts __put_task_struct (0x9a80f9a6 -> 0xf18b817a).
+# CONFIG_NF_TABLES is not set
+#   adds struct netns_nftables to struct net; init_net 0xc427c067 -> 0x99d0ad34.
+# CONFIG_BRIDGE_NETFILTER is not set
+#   adds struct netns_brnf to struct net; init_net 0xc427c067 -> 0xcb370e1c.
+# CONFIG_NF_CONNTRACK_NETLINK does not exist in 5.10 (6.x symbol).

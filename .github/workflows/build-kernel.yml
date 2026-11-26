@@ -120,6 +120,7 @@ jobs:
           echo "no SCM above $KSRC: release string will be clean"
 
           cp arch/arm64/configs/performance.fragment "$KSRC/arch/arm64/configs/"
+          cp arch/arm64/configs/droidspaces_desktop.fragment "$KSRC/arch/arm64/configs/"
           cp -r abi "$KSRC/"
           shopt -s nullglob
           patch_list=(patches/*.patch)
@@ -140,7 +141,8 @@ jobs:
           set -euo pipefail
           make O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-gnu- gki_defconfig
           scripts/kconfig/merge_config.sh -m -O out out/.config \
-            arch/arm64/configs/performance.fragment
+            arch/arm64/configs/performance.fragment \
+            arch/arm64/configs/droidspaces_desktop.fragment
           make O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-gnu- olddefconfig
 
       - name: Assert ABI-critical config
@@ -186,6 +188,29 @@ jobs:
           check 'CONFIG_CFI_CLANG=y'
           check 'CONFIG_SHADOW_CALL_STACK=y'
 
+          # --- feat/droidspaces-desktop: container support, all built in ---
+          # Anything resolving to =m would be unloadable payload: boot.img
+          # cannot carry extra modules, so these must all be =y.
+          for sym in NAMESPACES PID_NS UTS_NS IPC_NS SYSVIPC POSIX_MQUEUE \
+                     DEVTMPFS TMPFS_XATTR TMPFS_POSIX_ACL \
+                     NETFILTER_ADVANCED NETFILTER_XT_MATCH_ADDRTYPE MACVLAN \
+                     IP6_NF_IPTABLES IP6_NF_FILTER IP6_NF_MANGLE IP6_NF_NAT \
+                     IP6_NF_TARGET_MASQUERADE; do
+            check "CONFIG_${sym}=y"
+          done
+
+          # Measured ABI breaks and the user-mandated exclusions.
+          # CGROUP_DEVICE resizes struct css_set (CGROUP_SUBSYS_COUNT);
+          # NF_TABLES and BRIDGE_NETFILTER both add members to struct net.
+          # Each one shifts vendor CRCs; see droidspaces_desktop.fragment.
+          for bad in CGROUP_DEVICE NF_TABLES BRIDGE_NETFILTER \
+                     USER_NS CFS_BANDWIDTH CGROUP_PIDS DEVTMPFS_MOUNT; do
+            if grep -qx "CONFIG_${bad}=y" out/.config; then
+              echo "FAIL: ${bad} must not be enabled"
+              exit 1
+            fi
+          done
+
           for bad in CONFIG_LTO_CLANG_FULL \
                      CONFIG_TRANSPARENT_HUGEPAGE_ALWAYS \
                      CONFIG_TRANSPARENT_HUGEPAGE_LEGACY_SYSFS \
@@ -198,6 +223,47 @@ jobs:
             fi
           done
           echo "config assertions: OK"
+
+      - name: Preflight vendor CRC spot-check
+        working-directory: ${{ env.KSRC }}
+        run: |
+          set -euo pipefail
+          # Cheap early warning, before the 40-minute LTO link: these four
+          # objects cover every struct the container options can reach --
+          # task_struct (fork.c), pid_namespace (pid.c), net (net_namespace.c)
+          # and user_struct (user.c). A defect here fails in ~2 minutes
+          # instead of after the full build.
+          make O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-gnu- \
+            -j"$(nproc)" net/core/net_namespace.o kernel/fork.o \
+            kernel/pid.o kernel/user.o
+          python3 - <<'PY'
+          import re
+          import sys
+
+          want = {}
+          with open("abi/x6882_kernel_required.tsv") as fh:
+              for line in fh:
+                  if line.startswith("#") or not line.strip():
+                      continue
+                  parts = line.rstrip("\n").split("\t")
+                  if len(parts) >= 2:
+                      want[parts[0]] = parts[1]
+
+          checked = bad = 0
+          for obj in ("net/core/net_namespace.o", "kernel/fork.o",
+                      "kernel/pid.o", "kernel/user.o"):
+              for line in open(obj + ".symversions"):
+                  m = re.match(r"__crc_(\w+) = (0x[0-9a-f]+);", line.strip())
+                  if not m or m.group(1) not in want:
+                      continue
+                  checked += 1
+                  if int(m.group(2), 16) != int(want[m.group(1)], 16):
+                      bad += 1
+                      print("MISMATCH %-40s got %s want %s"
+                            % (m.group(1), m.group(2), want[m.group(1)]))
+          print("preflight: checked=%d mismatch=%d" % (checked, bad))
+          sys.exit(1 if bad else 0)
+          PY
 
       - name: Upload failing config
         if: failure()
@@ -225,6 +291,12 @@ jobs:
           echo "kernelrelease: $rel"
           # Spec: 5.10.xxx-android12-9<KERNEL_NAME>, never -dirty, never -g<sha>.
           expected="${ACK_VERSION}-android12-9-Satetsu-Shigure"
+          echo "=== out/include/generated/utsrelease.h ==="
+          cat out/include/generated/utsrelease.h
+          grep -qx "#define UTS_RELEASE \"$expected\"" out/include/generated/utsrelease.h || {
+            echo "FAIL: utsrelease.h does not hold $expected"
+            exit 1
+          }
           if [[ "$rel" != "$expected" ]]; then
             echo "FAIL: expected '$expected', got '$rel'"
             case "$rel" in
