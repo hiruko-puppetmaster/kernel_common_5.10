@@ -402,8 +402,8 @@ jobs:
             out/vmlinux.symvers \
             abi/x6882_kernel_required.tsv \
             android/abi_gki_aarch64.xml \
-            "$EXPECTED_MODULE_LAYOUT"
-          rc=$?
+            "$EXPECTED_MODULE_LAYOUT" 2>&1 | tee abi_gate.txt
+          rc=${PIPESTATUS[0]}
           set -e
           echo "abi_gate.py exit code: $rc"
           exit "$rc"
@@ -463,19 +463,59 @@ jobs:
         run: |
           set -euo pipefail
           {
+            echo "GKI 5.10 kernel for the Infinix Hot 50 4G (X6882 / MT6789)."
+            echo "Droidspaces desktop containers, USB gadget/host extras and the"
+            echo "UX polish fragments, all built in."
+            echo
             echo "Built from \`${GITHUB_SHA}\` on $(date -u +%Y-%m-%dT%H:%M:%SZ)."
+            echo
+            echo "### Provenance"
             echo
             echo "- kernelrelease: \`${RELEASE}\`"
             echo "- ACK source: \`${ACK_COMMIT}\` (${ACK_VERSION})"
             echo "- module_layout: \`$(awk '$2=="module_layout"{print $1}' "$KSRC/out/vmlinux.symvers")\`"
             echo "- Image bytes: $(stat -c%s "$KSRC/out/arch/arm64/boot/Image")"
+            echo "- Image.gz bytes: $(stat -c%s "$KSRC/out/arch/arm64/boot/Image.gz")"
             echo
-            echo "Verify before flashing:"
-            echo '```'
+            echo "### Vendor ABI"
+            echo
+            echo '\`\`\`'
+            cat abi_gate.txt
+            echo '\`\`\`'
+            echo
+            echo "### What is enabled"
+            echo
+            echo "- Containers: mount/pid/uts/ipc/net namespaces, SYSVIPC, POSIX"
+            echo "  mqueue, devtmpfs, tmpfs xattr/ACL, overlayfs, macvlan, IPv6 NAT,"
+            echo "  cgroup v2 base."
+            echo "- USB gadget configfs: HID, mass storage, NCM, ECM, ACM, UVC, UAC2."
+            echo "- USB host: serial bridges (CH341, CP210x, FTDI, PL2303, generic),"
+            echo "  UAS, CDC ethernet, RTL8152, AX88179, UVC, USB audio, raw HID, usbmon."
+            echo "- UX: kyber + BFQ schedulers, exFAT, Btrfs, ISO9660/Joliet/zisofs,"
+            echo "  UDF, WireGuard, TTL/hop-limit and TCPMSS targets, RCU_FAST_NO_HZ."
+            echo
+            echo "### Deliberately not enabled"
+            echo
+            echo "- USER_NS, CGROUP_DEVICE, NF_TABLES, BRIDGE_NETFILTER: each one moves"
+            echo "  vendor CRCs. The measured deltas are in the fragment headers."
+            echo "- USB_DEBUG / USB_GADGET_DEBUG: KMI-breaking debug fields."
+            echo
+            echo "### Verify before flashing"
+            echo
+            echo '\`\`\`'
             echo "sha256sum -c ${ZIP}.sha256"
-            echo '```'
+            echo '\`\`\`'
+            echo
+            echo "ABI-verified against all 1,395 required vendor CRCs and the full"
+            echo "7,298-symbol KMI. Not boot-tested by the builder: keep a boot"
+            echo "partition backup."
           } > release-notes.md
-          gh release create "$GITHUB_REF_NAME" "$ZIP" "$ZIP.sha256" \
+          gh release create "$GITHUB_REF_NAME" \
+            "$ZIP" "$ZIP.sha256" \
+            "$KSRC/out/arch/arm64/boot/Image" \
+            "$KSRC/out/arch/arm64/boot/Image.gz" \
+            "$KSRC/out/vmlinux.symvers" \
+            "$KSRC/build.log" \
             --title "Satetsu Shigure (GKI 5.10 - X6882)" \
             --notes-file release-notes.md
 
