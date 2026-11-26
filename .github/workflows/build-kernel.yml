@@ -224,6 +224,19 @@ jobs:
           done
           echo "config assertions: OK"
 
+      - name: Dump resolved container config
+        working-directory: ${{ env.KSRC }}
+        run: |
+          set -euo pipefail
+          # Recorded verbatim in the run log: this is the config the Image was
+          # actually built with, not the fragment as written.
+          echo "=== resolved out/.config: droidspaces-desktop surface ==="
+          grep -E '^(CONFIG_(NAMESPACES|PID_NS|UTS_NS|IPC_NS|SYSVIPC|POSIX_MQUEUE|DEVTMPFS|DEVTMPFS_MOUNT|TMPFS_XATTR|TMPFS_POSIX_ACL|NETFILTER_ADVANCED|NETFILTER_XT_MATCH_ADDRTYPE|MACVLAN|IP6_NF_IPTABLES|IP6_NF_FILTER|IP6_NF_MANGLE|IP6_NF_NAT|IP6_NF_TARGET_MASQUERADE|CGROUP_DEVICE|NF_TABLES|BRIDGE_NETFILTER|USER_NS|CFS_BANDWIDTH|CGROUP_PIDS|NF_CONNTRACK_NETLINK)=|# CONFIG_(DEVTMPFS_MOUNT|CGROUP_DEVICE|NF_TABLES|BRIDGE_NETFILTER|USER_NS|CFS_BANDWIDTH|CGROUP_PIDS|NF_CONNTRACK_NETLINK) is not set)' \
+            out/.config | sort
+          echo "=== unchanged ABI anchors ==="
+          grep -E '^(CONFIG_(LTO_CLANG_THIN|LTO_CLANG_FULL|MODVERSIONS|MODULE_SCMVERSION|CFI_CLANG|SHADOW_CALL_STACK|KASAN|KASAN_HW_TAGS|PREEMPT|HZ|CRYPTO_LZ4|TRANSPARENT_HUGEPAGE|TRANSPARENT_HUGEPAGE_MADVISE|ANDROID_KABI_RESERVE|ANDROID_VENDOR_HOOKS|ANDROID_VENDOR_OEM_DATA|LOCALVERSION)=|# CONFIG_(LTO_CLANG_FULL|TRANSPARENT_HUGEPAGE_ALWAYS) is not set)' \
+            out/.config | sort
+
       - name: Preflight vendor CRC spot-check
         working-directory: ${{ env.KSRC }}
         run: |
@@ -317,11 +330,16 @@ jobs:
           # `make Image` links vmlinux, and link-vmlinux.sh runs modpost with
           # MODPOST_VMLINUX=1, which writes vmlinux.symvers. Module.symvers is
           # only produced by a modules build, which this job does not do.
+          set +e
           python3 abi/abi_gate.py \
             out/vmlinux.symvers \
             abi/x6882_kernel_required.tsv \
             android/abi_gki_aarch64.xml \
             "$EXPECTED_MODULE_LAYOUT"
+          rc=$?
+          set -e
+          echo "abi_gate.py exit code: $rc"
+          exit "$rc"
 
       - name: Package AnyKernel3
         run: |
