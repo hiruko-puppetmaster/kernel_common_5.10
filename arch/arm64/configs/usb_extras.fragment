@@ -1,0 +1,31 @@
+# USB extras for X6882 (MT6789): gadget configfs + host classes, all built in.
+# Stacked on gki_defconfig + performance + droidspaces_desktop + ux_polish.
+#
+# Most of the requested surface is already =y in gki_defconfig: USB_GADGET,
+# USB_CONFIGFS and every F_* function, USB_STORAGE, USB_UAS, USB_USBNET,
+# USB_NET_CDCETHER/NCM, USB_RTL8152, USB_NET_AX88179_178A, MEDIA_SUPPORT +
+# MEDIA_USB_SUPPORT + MEDIA_CAMERA_SUPPORT, USB_VIDEO_CLASS, SND, SND_USB,
+# SND_USB_AUDIO, HID, HIDRAW, USB_HIDDEV, USB_CONFIGFS_F_UAC2. Only the delta
+# below actually changes anything.
+
+# --- USB serial bridges: BROM/preloader/MCU flashing, GPS, consoles ---
+# Absent from gki_defconfig entirely; USB_SERIAL_CORE is selected by USB_SERIAL.
+CONFIG_USB_SERIAL=y
+CONFIG_USB_SERIAL_GENERIC=y
+CONFIG_USB_SERIAL_CH341=y
+CONFIG_USB_SERIAL_CP210X=y
+CONFIG_USB_SERIAL_FTDI_SIO=y
+CONFIG_USB_SERIAL_PL2303=y
+
+# --- usbmon: bus packet capture for debugging the above ---
+# Stock keeps struct usb_bus's usbmon fields under this symbol, which shifts
+# 10 vendor CRCs. patches/0004 moves them into ANDROID_KABI_RESERVE(1..2),
+# so the layout and every CRC are unchanged and the option is now free.
+CONFIG_USB_MON=y
+
+# --- explicitly excluded: KMI-breaking debug flags ---
+# CONFIG_USB_GADGET_DEBUG is not set
+#   adds fields to struct usb_gadget and struct usb_ep.
+# CONFIG_USB_GADGET_DEBUG_FILES is not set
+#   adds debugfs plumbing to the gadget core.
+# CONFIG_USB_DEBUG does not exist in 5.10 (removed in 2.6.31); nothing to set.

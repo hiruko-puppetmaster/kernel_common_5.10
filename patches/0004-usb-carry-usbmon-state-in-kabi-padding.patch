@@ -1,0 +1,86 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: X6882 GKI port <port@localhost>
+Date: Thu, 26 Nov 2026 00:00:00 +0000
+Subject: [PATCH] USB: carry usbmon state in the kABI padding of struct usb_bus
+
+CONFIG_USB_MON adds two members to struct usb_bus:
+
+    #if defined(CONFIG_USB_MON) || defined(CONFIG_USB_MON_MODULE)
+            struct mon_bus *mon_bus;
+            int monitored;
+    #endif
+
+Turning it on therefore changes the struct's layout, and with it the CRC
+of every exported symbol whose type graph reaches struct usb_bus. Measured
+on this tree with the vendor baseline: 10 of the 1,395 required symbols
+move, including usbnet_get_endpoints (0xf4f15b5b -> 0x31f162f5) and
+usbnet_read_cmd (0x2964220d -> 0xd5c3872d).
+
+struct usb_bus already reserves four u64 slots of kABI padding. The new
+state is exactly 16 bytes, so it fits in ANDROID_KABI_RESERVE(1..2) with
+no layout change at all:
+
+    stock:    144 | u64 android_kabi_reserved1
+              152 | u64 android_kabi_reserved2
+              160 | u64 android_kabi_reserved3
+              [sizeof=176, align=8]
+
+    patched:  144 | struct mon_bus *mon_bus
+              152 | int monitored
+              160 | u64 android_kabi_reserved3
+              [sizeof=176, align=8]
+
+_ANDROID_KABI_REPLACE collapses to the original reserves under
+__GENKSYMS__, so genksyms hashes the same token stream as stock and every
+CRC stays put. This is the same mechanism patches/0002 and 0003 use for
+CONFIG_SYSVIPC and CONFIG_POSIX_MQUEUE.
+
+Verified: all six USB witness objects (usb, hcd, message, driver,
+gadget/udc/core, usbnet) keep every CRC; the only new exports are
+usb_mon_register and usb_mon_deregister, which stock never exported.
+---
+ include/linux/usb.h | 27 ++++++++++++++-----------
+ 1 file changed, 15 insertions(+), 12 deletions(-)
+
+diff --git a/include/linux/usb.h b/include/linux/usb.h
+--- a/include/linux/usb.h
++++ b/include/linux/usb.h
+@@ -438,6 +438,8 @@
+ /*
+  * Allocated per bus (tree of devices) we have:
+  */
++struct mon_bus;
++
+ struct usb_bus {
+ 	struct device *controller;	/* host side hardware */
+ 	struct device *sysdev;		/* as seen from firmware or bus */
+@@ -478,13 +480,20 @@
+ 
+ 	unsigned resuming_ports;	/* bit array: resuming root-hub ports */
+ 
+-#if defined(CONFIG_USB_MON) || defined(CONFIG_USB_MON_MODULE)
+-	struct mon_bus *mon_bus;	/* non-null when associated */
+-	int monitored;			/* non-zero when monitored */
+-#endif
+-
+-	ANDROID_KABI_RESERVE(1);
+-	ANDROID_KABI_RESERVE(2);
++	/*
++	 * usbmon state. Stock keeps this under CONFIG_USB_MON, which would
++	 * change struct usb_bus's CRC and with it every exported symbol whose
++	 * type graph reaches this struct. Carrying it in the kABI padding
++	 * instead keeps the layout and the genksyms token stream identical:
++	 * _ANDROID_KABI_REPLACE collapses to the original u64 reserves under
++	 * __GENKSYMS__, and the 16 bytes of new state fit exactly in the 16
++	 * bytes of ANDROID_KABI_RESERVE(1..2).
++	 */
++	_ANDROID_KABI_REPLACE(ANDROID_KABI_RESERVE(1); ANDROID_KABI_RESERVE(2),
++			      struct {
++				      struct mon_bus *mon_bus;
++				      int monitored;
++			      });
+ 	ANDROID_KABI_RESERVE(3);
+ 	ANDROID_KABI_RESERVE(4);
+ };
+-- 
+2.43.0

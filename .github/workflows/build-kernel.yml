@@ -121,6 +121,8 @@ jobs:
 
           cp arch/arm64/configs/performance.fragment "$KSRC/arch/arm64/configs/"
           cp arch/arm64/configs/droidspaces_desktop.fragment "$KSRC/arch/arm64/configs/"
+          cp arch/arm64/configs/usb_extras.fragment "$KSRC/arch/arm64/configs/"
+          cp arch/arm64/configs/ux_polish.fragment "$KSRC/arch/arm64/configs/"
           cp -r abi "$KSRC/"
           shopt -s nullglob
           patch_list=(patches/*.patch)
@@ -142,7 +144,9 @@ jobs:
           make O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-gnu- gki_defconfig
           scripts/kconfig/merge_config.sh -m -O out out/.config \
             arch/arm64/configs/performance.fragment \
-            arch/arm64/configs/droidspaces_desktop.fragment
+            arch/arm64/configs/droidspaces_desktop.fragment \
+            arch/arm64/configs/usb_extras.fragment \
+            arch/arm64/configs/ux_polish.fragment
           make O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-gnu- olddefconfig
 
       - name: Assert ABI-critical config
@@ -211,6 +215,43 @@ jobs:
             fi
           done
 
+          # --- feat/usb-extras: gadget configfs + host classes, all built in ---
+          for sym in USB_GADGET USB_CONFIGFS USB_CONFIGFS_F_HID \
+                     USB_CONFIGFS_MASS_STORAGE USB_CONFIGFS_NCM \
+                     USB_CONFIGFS_ECM USB_CONFIGFS_ACM USB_CONFIGFS_F_UVC \
+                     USB_CONFIGFS_F_UAC2 USB_ACM USB_SERIAL USB_SERIAL_GENERIC \
+                     USB_SERIAL_CH341 USB_SERIAL_CP210X USB_SERIAL_FTDI_SIO \
+                     USB_SERIAL_PL2303 USB_STORAGE USB_UAS USB_USBNET \
+                     USB_NET_CDCETHER USB_NET_CDC_NCM USB_RTL8152 \
+                     USB_NET_AX88179_178A USB_VIDEO_CLASS SND_USB_AUDIO \
+                     HID HIDRAW USB_HIDDEV USB_MON; do
+            check "CONFIG_${sym}=y"
+          done
+          for bad in USB_GADGET_DEBUG USB_GADGET_DEBUG_FILES USB_GADGET_VERBOSE; do
+            if grep -qx "CONFIG_${bad}=y" out/.config; then
+              echo "FAIL: ${bad} must not be enabled"
+              exit 1
+            fi
+          done
+
+          # --- feat/usb-extras: ux_polish, filesystems and TTL mangling ---
+          for sym in ISO9660_FS JOLIET ZISOFS UDF_FS BTRFS_FS \
+                     BTRFS_FS_POSIX_ACL NETFILTER_XT_TARGET_HL \
+                     IP_NF_TARGET_TTL IP6_NF_TARGET_HL; do
+            check "CONFIG_${sym}=y"
+          done
+          # Already =y in gki_defconfig; asserted so a base bump cannot lose them.
+          for sym in MQ_IOSCHED_KYBER IOSCHED_BFQ EXFAT_FS WIREGUARD \
+                     RCU_FAST_NO_HZ NETFILTER_XT_TARGET_TCPMSS; do
+            check "CONFIG_${sym}=y"
+          done
+          for bad in FUNCTION_TRACER STACK_TRACER SLUB_DEBUG_ON ZRAM; do
+            if grep -qx "CONFIG_${bad}=y" out/.config; then
+              echo "FAIL: ${bad} must not be enabled"
+              exit 1
+            fi
+          done
+
           for bad in CONFIG_LTO_CLANG_FULL \
                      CONFIG_TRANSPARENT_HUGEPAGE_ALWAYS \
                      CONFIG_TRANSPARENT_HUGEPAGE_LEGACY_SYSFS \
@@ -233,6 +274,9 @@ jobs:
           echo "=== resolved out/.config: droidspaces-desktop surface ==="
           grep -E '^(CONFIG_(NAMESPACES|PID_NS|UTS_NS|IPC_NS|SYSVIPC|POSIX_MQUEUE|DEVTMPFS|DEVTMPFS_MOUNT|TMPFS_XATTR|TMPFS_POSIX_ACL|NETFILTER_ADVANCED|NETFILTER_XT_MATCH_ADDRTYPE|MACVLAN|IP6_NF_IPTABLES|IP6_NF_FILTER|IP6_NF_MANGLE|IP6_NF_NAT|IP6_NF_TARGET_MASQUERADE|CGROUP_DEVICE|NF_TABLES|BRIDGE_NETFILTER|USER_NS|CFS_BANDWIDTH|CGROUP_PIDS|NF_CONNTRACK_NETLINK)=|# CONFIG_(DEVTMPFS_MOUNT|CGROUP_DEVICE|NF_TABLES|BRIDGE_NETFILTER|USER_NS|CFS_BANDWIDTH|CGROUP_PIDS|NF_CONNTRACK_NETLINK) is not set)' \
             out/.config | sort
+          echo "=== resolved out/.config: usb extras + ux polish ==="
+          grep -E '^(CONFIG_(USB_SERIAL|USB_SERIAL_GENERIC|USB_SERIAL_CH341|USB_SERIAL_CP210X|USB_SERIAL_FTDI_SIO|USB_SERIAL_PL2303|USB_MON|USB_GADGET|USB_CONFIGFS|USB_CONFIGFS_F_HID|USB_CONFIGFS_MASS_STORAGE|USB_CONFIGFS_NCM|USB_CONFIGFS_ECM|USB_CONFIGFS_ACM|USB_CONFIGFS_F_UVC|USB_CONFIGFS_F_UAC2|USB_ACM|USB_STORAGE|USB_UAS|USB_USBNET|USB_NET_CDCETHER|USB_NET_CDC_NCM|USB_RTL8152|USB_NET_AX88179_178A|USB_VIDEO_CLASS|SND_USB_AUDIO|HID|HIDRAW|USB_HIDDEV|ISO9660_FS|JOLIET|ZISOFS|UDF_FS|BTRFS_FS|BTRFS_FS_POSIX_ACL|NETFILTER_XT_TARGET_HL|IP_NF_TARGET_TTL|IP6_NF_TARGET_HL|MQ_IOSCHED_KYBER|IOSCHED_BFQ|EXFAT_FS|WIREGUARD|RCU_FAST_NO_HZ)=|# CONFIG_(USB_GADGET_DEBUG|USB_GADGET_DEBUG_FILES|FUNCTION_TRACER|STACK_TRACER|SLUB_DEBUG_ON) is not set)' \
+            out/.config | sort
           echo "=== unchanged ABI anchors ==="
           grep -E '^(CONFIG_(LTO_CLANG_THIN|LTO_CLANG_FULL|MODVERSIONS|MODULE_SCMVERSION|CFI_CLANG|SHADOW_CALL_STACK|KASAN|KASAN_HW_TAGS|PREEMPT|HZ|CRYPTO_LZ4|TRANSPARENT_HUGEPAGE|TRANSPARENT_HUGEPAGE_MADVISE|ANDROID_KABI_RESERVE|ANDROID_VENDOR_HOOKS|ANDROID_VENDOR_OEM_DATA|LOCALVERSION)=|# CONFIG_(LTO_CLANG_FULL|TRANSPARENT_HUGEPAGE_ALWAYS) is not set)' \
             out/.config | sort
@@ -248,7 +292,10 @@ jobs:
           # instead of after the full build.
           make O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-gnu- \
             -j"$(nproc)" net/core/net_namespace.o kernel/fork.o \
-            kernel/pid.o kernel/user.o
+            kernel/pid.o kernel/user.o \
+            drivers/usb/core/usb.o drivers/usb/core/hcd.o \
+            drivers/usb/core/message.o drivers/usb/core/driver.o \
+            drivers/usb/gadget/udc/core.o drivers/net/usb/usbnet.o
           python3 - <<'PY'
           import os
           import re
@@ -258,10 +305,13 @@ jobs:
           # because ThinLTO links the .o.symversions files in at the end.
           OBJDIR = "out"
           OBJS = ("net/core/net_namespace.o", "kernel/fork.o",
-                  "kernel/pid.o", "kernel/user.o")
+                  "kernel/pid.o", "kernel/user.o",
+                  "drivers/usb/core/usb.o", "drivers/usb/core/hcd.o",
+                  "drivers/usb/core/message.o", "drivers/usb/core/driver.o",
+                  "drivers/usb/gadget/udc/core.o", "drivers/net/usb/usbnet.o")
           # kernel/user.o exports nothing the vendor imports; it is compiled
           # only as a witness for struct user_struct.
-          MIN_CHECKED = 16
+          MIN_CHECKED = 51
 
           want = {}
           with open("abi/x6882_kernel_required.tsv") as fh:

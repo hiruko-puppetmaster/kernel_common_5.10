@@ -1,0 +1,31 @@
+# UX polish: filesystems and netfilter targets that gki_defconfig leaves out.
+# Stacked on gki_defconfig + performance + droidspaces + usb_extras.
+#
+# Already present in gki_defconfig and therefore NOT repeated here:
+#   MQ_IOSCHED_KYBER=y  IOSCHED_BFQ=y  EXFAT_FS=y  WIREGUARD=y
+#   NETFILTER_ADVANCED=y  NETFILTER_XT_TARGET_TCPMSS=y  RCU_FAST_NO_HZ=y
+#   CRYPTO_CHACHA20POLY1305=y
+# Already in the desired state (off):
+#   FUNCTION_TRACER, STACK_TRACER, SLUB_DEBUG_ON
+
+# --- loop-mounted ISOs and desktop images ---
+CONFIG_ISO9660_FS=y
+CONFIG_JOLIET=y
+CONFIG_ZISOFS=y
+CONFIG_UDF_FS=y
+
+# --- compressed desktop container images ---
+CONFIG_BTRFS_FS=y
+CONFIG_BTRFS_FS_POSIX_ACL=y
+
+# --- TTL / hop-limit mangling for hotspot tethering ---
+CONFIG_NETFILTER_XT_TARGET_HL=y
+CONFIG_IP_NF_TARGET_TTL=y
+CONFIG_IP6_NF_TARGET_HL=y
+
+# --- not applicable: zram is a vendor_dlkm module ---
+# CONFIG_ZRAM_WRITEBACK is not set
+#   gki_defconfig has no CONFIG_ZRAM at all; the device's zram.ko comes from
+#   vendor_dlkm and is prebuilt. Setting ZRAM_WRITEBACK here would not change
+#   that module, and enabling CONFIG_ZRAM=y would create a second, conflicting
+#   zram driver. Left alone deliberately.
