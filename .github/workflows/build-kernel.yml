@@ -244,14 +244,24 @@ jobs:
           # Cheap early warning, before the 40-minute LTO link: these four
           # objects cover every struct the container options can reach --
           # task_struct (fork.c), pid_namespace (pid.c), net (net_namespace.c)
-          # and user_struct (user.c). A defect here fails in ~2 minutes
+          # and user_struct (user.c). A defect here fails in ~15 seconds
           # instead of after the full build.
           make O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-gnu- \
             -j"$(nproc)" net/core/net_namespace.o kernel/fork.o \
             kernel/pid.o kernel/user.o
           python3 - <<'PY'
+          import os
           import re
           import sys
+
+          # kbuild writes __crc_<sym> = 0x...; next to each object under O=,
+          # because ThinLTO links the .o.symversions files in at the end.
+          OBJDIR = "out"
+          OBJS = ("net/core/net_namespace.o", "kernel/fork.o",
+                  "kernel/pid.o", "kernel/user.o")
+          # kernel/user.o exports nothing the vendor imports; it is compiled
+          # only as a witness for struct user_struct.
+          MIN_CHECKED = 16
 
           want = {}
           with open("abi/x6882_kernel_required.tsv") as fh:
@@ -263,18 +273,25 @@ jobs:
                       want[parts[0]] = parts[1]
 
           checked = bad = 0
-          for obj in ("net/core/net_namespace.o", "kernel/fork.o",
-                      "kernel/pid.o", "kernel/user.o"):
-              for line in open(obj + ".symversions"):
+          for obj in OBJS:
+              path = os.path.join(OBJDIR, obj + ".symversions")
+              n = 0
+              for line in open(path):
                   m = re.match(r"__crc_(\w+) = (0x[0-9a-f]+);", line.strip())
                   if not m or m.group(1) not in want:
                       continue
+                  n += 1
                   checked += 1
                   if int(m.group(2), 16) != int(want[m.group(1)], 16):
                       bad += 1
                       print("MISMATCH %-40s got %s want %s"
                             % (m.group(1), m.group(2), want[m.group(1)]))
+              print("%-28s %d vendor symbols" % (obj, n))
           print("preflight: checked=%d mismatch=%d" % (checked, bad))
+          if checked < MIN_CHECKED:
+              print("FAIL: only %d symbols checked, expected at least %d"
+                    % (checked, MIN_CHECKED))
+              sys.exit(1)
           sys.exit(1 if bad else 0)
           PY
 
